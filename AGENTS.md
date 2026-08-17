@@ -5,7 +5,7 @@
 | 服务 | 入口 | 端口 | 技术栈 |
 |---------|-----------|------|-------|
 | `chat-ai-ui-main/` | `npm run dev` | `:5173` | Vue 3, TypeScript, Vite 6, Element Plus 2, Tailwind CSS 4, Pinia 3, Axios, Vue Router, Marked, Highlight.js |
-| `rag_api_service/` | `uv run --project rag_api_service python rag_api_service/run.py` | `:8011` | FastAPI, LlamaIndex, ChromaDB, BM25, Sentence-Transformers, PyMuPDF — 完整 RAG 服务 |
+| `rag_api_service/` | `uv run --project rag_api_service python rag_api_service/run.py` | `:8011` | FastAPI 知识库适配层；支持 RAGFlow 或原有 LlamaIndex/Chroma/BM25 后端 |
 | `mcp_service/` | `uv run --project mcp_service python mcp_service/run.py` | `:8010/mcp` | FastMCP 纯代理，HTTP 调 rag_api_service |
 | `langgraph_service/` | `uv run --project langgraph_service langgraph dev --config langgraph_service/langgraph.json` | `:2024` | LangGraph, LangMem, LangChain-Tavily, MCP Adapters, PostgreSQL checkpointer |
 | `main_service/` | `uv run --project main_service python main_service/run.py` | `:8000` | FastAPI, SQLAlchemy, PyJWT, pwdlib[argon2], langgraph-sdk |
@@ -31,6 +31,7 @@ chat-ai-ui-main (Vue 3 :5173) → main_service (FastAPI HTTP :8000)
 - `main_service` 通过 HTTP REST 直接调用 `rag_api_service`（上传/列表/重置，不再走 MCP）。
 - `langgraph_service` 通过 MCP streamable-http 调用 `mcp_service.query_rag`。
 - `mcp_service.query_rag` 通过 HTTP 调用 `rag_api_service` 的 `/api/docs/query` 接口。
+- RAGFlow 模式下，`rag_api_service` 将上传、解析、文档管理和检索转发给 RAGFlow，再用已配置的 DashScope 模型基于召回片段生成兼容的 `answer/sources` 响应。
 
 ## 职责分离
 
@@ -42,7 +43,7 @@ chat-ai-ui-main (Vue 3 :5173) → main_service (FastAPI HTTP :8000)
 | `langgraph_service` | 多 Agent 编排，`knowledge_agent` 通过 MCP 调 `query_rag` |
 | `main_service` | 对外 HTTP 入口，JWT 鉴权，组合上面三个服务 |
 
-`rag_api_service` 拥有完整 RAG 核心代码（core/ingestion、workflow、pdf_parser），自身管理数据目录。
+`rag_api_service` 通过 `RAG_BACKEND` 切换后端：`ragflow` 调用独立 RAGFlow 服务，`legacy` 使用原有 core/ingestion、workflow、pdf_parser 并管理本地数据目录。
 `mcp_service` 是纯 HTTP 代理，不包含任何 RAG 代码，通过 HTTP 调用 `rag_api_service` 的 `/api/docs/query`。
 
 ## 数据目录
@@ -74,8 +75,10 @@ START → summarize → intent_router → (knowledge_agent | writing_workflow | 
 ## 命令（在项目根目录执行）
 
 ```powershell
-# 安装依赖（每个服务独立虚拟环境，Python 3.11）
+# 安装依赖（每个服务独立虚拟环境，Python 3.11；rag_api_service 仅安装 RAGFlow 依赖）
 cd rag_api_service && uv sync --python 3.11 && cd ..
+# 切回 legacy 后端时：cd rag_api_service && uv pip install --python .venv -r requirements-legacy.txt && cd ..
+# 并显式设置 RAG_BACKEND=legacy、ENABLE_LEGACY_RAG=true
 cd mcp_service && uv sync --python 3.11 && cd ..
 cd langgraph_service && uv sync --python 3.11 && cd ..
 cd main_service && uv sync --python 3.11 && cd ..
@@ -99,6 +102,6 @@ cd chat-ai-ui-main/chat-ai-ui-main && npm run dev                      # :5173
 - `test/` 目录是临时脚本和示例文件，不是测试套件。
 - `.env` 含有真实 API 密钥 — 不要提交或泄露。
 - `mcp_service/run.py` 使用 `transport="streamable-http"`（FastMCP）。
-- `rag_api_service` 拥有完整 RAG 核心代码（core/ingestion、workflow、pdf_parser），自身管理数据目录。
+- `rag_api_service` 默认使用并只加载 RAGFlow 后端；legacy 核心代码位于独立模块，只有安装独立依赖并设置 `RAG_BACKEND=legacy`、`ENABLE_LEGACY_RAG=true` 后才会加载。
 - `mcp_service` 是纯 HTTP 代理，不包含任何 RAG 代码，通过 HTTP 调用 `rag_api_service` 的 `/api/docs/query`。
 - `langgraph_service` 在 Windows 上需要 `asyncio.set_event_loop_policy(WindowsSelectorEventLoopPolicy())`（已在 `agent.py` 中处理）。

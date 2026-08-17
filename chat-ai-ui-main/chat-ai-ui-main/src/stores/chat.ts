@@ -1,7 +1,9 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref } from 'vue';
 import axios from 'axios';
 import { useUserStore } from './user';
+
+export type ChatMode = 'agent' | 'knowledge' | 'writing';
 
 interface ChatMessage {
   role: string;
@@ -209,7 +211,7 @@ export const useChatStore = defineStore('chat', () => {
   /**
    * 对话接口调用
    */
-  const sendMessage = async (message: string, knowledge_bool: boolean) => {
+  const sendMessage = async (message: string, mode: ChatMode = 'agent') => {
     if (!message.trim() || !userStore.token) return;
 
     // 如果没有当前会话，先创建一个
@@ -236,12 +238,12 @@ export const useChatStore = defineStore('chat', () => {
     isPaused.value = false;
 
     try {
-      await handleStreamResponse(message, knowledge_bool);
-    } catch (error) {
+      await handleStreamResponse(message, mode);
+    } catch (error: any) {
       console.error('Error sending message: ', error);
       messages.value.push({
         role: 'ai',
-        content: 'Error: unable to process request',
+        content: error?.message || '暂时无法处理请求',
         sources: []
       });
     } finally {
@@ -252,7 +254,7 @@ export const useChatStore = defineStore('chat', () => {
   /**
    * 处理流式响应
    */
-  const handleStreamResponse = async (message: string, knowledge_bool: boolean) => {
+  const handleStreamResponse = async (message: string, mode: ChatMode) => {
     const aiMessageIndex = messages.value.length;
     messages.value.push({ role: 'ai', content: '', sources: [], isReviewing: false, draft: '' });
     
@@ -268,13 +270,20 @@ export const useChatStore = defineStore('chat', () => {
         body: JSON.stringify({
           query: message,
           conversation_id: currentConversationId.value,
-          knowledge_bool: knowledge_bool,
+          mode,
         }),
         signal: abortController.signal,
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        let detail = `请求失败（HTTP ${response.status}）`;
+        try {
+          const errorBody = await response.json();
+          detail = errorBody.detail || detail;
+        } catch {
+          // 非 JSON 错误响应保留状态码提示。
+        }
+        throw new Error(detail);
       }
 
       if (!response.body) {
@@ -301,6 +310,14 @@ export const useChatStore = defineStore('chat', () => {
 
             try {
               const data = JSON.parse(jsonStr);
+              if (data.type === 'error') {
+                messages.value[aiMessageIndex].content = data.content || '生成失败，请检查文本模型配置';
+                messages.value[aiMessageIndex].isWriting = false;
+                messages.value[aiMessageIndex].currentStep = '';
+                isLoading.value = false;
+                currentWritingStep.value = '';
+                break;
+              }
               if (data.finished) {
                 break;
               }

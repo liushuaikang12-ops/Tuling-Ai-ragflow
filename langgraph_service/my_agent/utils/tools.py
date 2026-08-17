@@ -60,17 +60,30 @@ async def call_mcp_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
         return await _call_via_mcp(tool_name, arguments)
 
 
-# 初始化 Tavily 搜索工具
-tavily_search = TavilySearch(
-    max_results=5,
-    topic="general",
-)
+_tavily_search: TavilySearch | None = None
+
+
+def _get_tavily_search() -> TavilySearch | None:
+    """Tavily 是可选兜底能力，不应阻塞知识库主链启动。"""
+    global _tavily_search
+    if not Settings.TAVILY_API_KEY:
+        return None
+    if _tavily_search is None:
+        _tavily_search = TavilySearch(
+            max_results=5,
+            topic="general",
+            tavily_api_key=Settings.TAVILY_API_KEY,
+        )
+    return _tavily_search
 
 
 @tool
 def web_search(query: str) -> str:
     """搜索互联网上的公开信息，用于知识库不足时补充事实。"""
     try:
+        tavily_search = _get_tavily_search()
+        if tavily_search is None:
+            return "未配置 TAVILY_API_KEY，已跳过联网搜索。"
         results = tavily_search.invoke({"query": query})
         # 格式化搜索结果
         if isinstance(results, dict):

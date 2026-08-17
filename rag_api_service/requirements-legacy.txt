@@ -1,0 +1,13 @@
+# 仅在显式启用原有 LlamaIndex/Chroma/BM25 后端时安装。
+# RAGFlow 模式不得安装或导入这些依赖。
+chromadb>=0.4.0
+llama-index>=0.10.0
+llama-index-embeddings-huggingface>=0.5.4
+llama-index-llms-dashscope>=0.4.0
+llama-index-vector-stores-chroma>=0.4.2
+llama-index-storage-docstore-redis>=0.3.0
+llama-index-storage-index-store-redis>=0.4.0
+llama-index-retrievers-bm25>=0.5.2
+pymupdf4llm>=1.27.0
+pymupdf>=1.27.2.2
+sentence-transformers>=2.2.0

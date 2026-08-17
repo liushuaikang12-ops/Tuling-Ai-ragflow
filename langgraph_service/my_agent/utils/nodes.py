@@ -15,6 +15,11 @@ from my_agent.utils.tools import call_mcp_tool, web_search
 # 用于正常回答的大模型。
 def get_llm() -> ChatOpenAI:
     """创建统一的 LLM 实例，供图中各节点复用。"""
+    if not Settings.API_KEY or not Settings.API_BASE_URL:
+        raise RuntimeError(
+            "文本生成节点需要配置 DEEPSEEK_API_KEY、DASHSCOPE_API_KEY "
+            "或通用 TEXT_MODEL_API_KEY"
+        )
     return ChatOpenAI(
         model=Settings.MODEL,
         api_key=Settings.API_KEY,
@@ -23,20 +28,21 @@ def get_llm() -> ChatOpenAI:
     )
 
 
-# 用于短期记忆摘要的模型。
-# 这里绑定更小的 max_tokens，避免摘要本身过长。
-summarization_model = get_llm().bind(max_tokens=128)
-
-# 官方风格的短期记忆摘要节点：
-# - 当历史消息过长时，自动把旧消息压缩成 running summary
-# - 生成 `summarized_messages` 给后续节点使用
-summarization_node = SummarizationNode(
-    token_counter=count_tokens_approximately,
-    model=summarization_model,
-    max_tokens=4096,
-    max_tokens_before_summary=2048,
-    max_summary_tokens=512,
-)
+if Settings.API_KEY and Settings.API_BASE_URL:
+    # 有文本模型时使用官方短期记忆摘要节点。
+    summarization_model = get_llm().bind(max_tokens=128)
+    summarization_node = SummarizationNode(
+        token_counter=count_tokens_approximately,
+        model=summarization_model,
+        max_tokens=4096,
+        max_tokens_before_summary=2048,
+        max_summary_tokens=512,
+    )
+else:
+    # 知识库检索不应因为缺少文本生成模型而无法启动。未配置时仅透传消息；
+    # 配置模型并重启服务后会自动恢复摘要能力。
+    def summarization_node(state: GraphState) -> GraphState:
+        return {"summarized_messages": list(state.get("messages", []))}
 
 
 def get_latest_user_query(state: GraphState) -> str:
@@ -64,7 +70,6 @@ def get_model_messages(state: GraphState) -> list:
     如果摘要节点暂时没有提供输出，则退回原始 messages。
     """
     summarized_messages = state.get("summarized_messages")
-    print("summarized_messages:", summarized_messages)
     if summarized_messages:
         return list(summarized_messages)
     return list(state.get("messages", []))
@@ -72,6 +77,13 @@ def get_model_messages(state: GraphState) -> list:
 
 def intent_router(state: GraphState) -> GraphState:
     """主智能体：识别当前请求应路由到知识库、写作还是闲聊。"""
+    # 新版前端显式模式优先，避免写作/知识库模式再次经过意图识别。
+    mode = state.get("mode")
+    if mode == "knowledge":
+        return {"intent": "knowledge"}
+    if mode == "writing":
+        return {"intent": "writing"}
+
     # 如果前端显式指定了 knowledge_bool，直接按用户意图路由
     knowledge_bool = state.get("knowledge_bool")
     if knowledge_bool is True:
@@ -200,8 +212,6 @@ async def knowledge_agent(state: GraphState) -> GraphState:
         "query": query,
     }
     response = await call_mcp_tool("query_rag", tool_args)
-    print("knowledge_agent response:", response)
-
     if isinstance(response, dict):
         answer, sources = _parse_rag_response(response)
         # 将sources存储到AIMessage的元数据中，实现消息级别的sources关联
@@ -211,6 +221,7 @@ async def knowledge_agent(state: GraphState) -> GraphState:
         )
         return {
             "answer": answer,
+            "sources": sources,
             "messages": [ai_message],
         }
 
@@ -259,7 +270,6 @@ def chat_agent(state: GraphState) -> GraphState:
         SystemMessage(content="你是普通对话子智能体，直接自然回答用户。"),
         *get_model_messages(state),
     ]
-    print(f"[DEBUG] chat_agent: {prompt_messages}")
     answer = str(llm.invoke(prompt_messages).content)
     return {
         "answer": answer,

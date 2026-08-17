@@ -18,7 +18,12 @@ def query_rag(
     payload = {
         "query": query,
     }
-    response = httpx.post(f"{RAG_API_URL}/query", json=payload, timeout=120.0)
+    response = httpx.post(
+        f"{RAG_API_URL}/query",
+        json=payload,
+        timeout=120.0,
+        trust_env=False,
+    )
     response.raise_for_status()
     return response.json()
 

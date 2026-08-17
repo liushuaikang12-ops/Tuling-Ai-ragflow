@@ -125,6 +125,7 @@ class LangGraphService:
         thread_id: str,
         conversation_id: str | None = None,
         query: str,
+        mode: str | None = None,
         knowledge_bool: bool | None = None,
     ) -> dict[str, Any]:
         """
@@ -144,6 +145,8 @@ class LangGraphService:
             ],
             "user_id": thread_id,
         }
+        if mode is not None:
+            input_payload["mode"] = mode
         if knowledge_bool is not None:
             input_payload["knowledge_bool"] = knowledge_bool
 
@@ -207,6 +210,7 @@ class LangGraphService:
         thread_id: str,
         conversation_id: str | None = None,
         query: str,
+        mode: str | None = None,
         knowledge_bool: bool | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """
@@ -227,6 +231,8 @@ class LangGraphService:
             ],
             "user_id": thread_id,
         }
+        if mode is not None:
+            input_payload["mode"] = mode
         if knowledge_bool is not None:
             input_payload["knowledge_bool"] = knowledge_bool
         async for event in self.client.runs.stream(

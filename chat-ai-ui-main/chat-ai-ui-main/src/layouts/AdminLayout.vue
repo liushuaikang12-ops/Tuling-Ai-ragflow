@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { computed } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useUserStore } from '../stores/user';
 
@@ -9,9 +9,19 @@ const userStore = useUserStore();
 
 const sidebarItems = [
   {
+    label: '返回对话',
+    icon: 'chat',
+    path: '/chat',
+  },
+  {
     label: '文档管理',
     icon: 'docs',
     path: '/admin/documents',
+  },
+  {
+    label: '使用说明',
+    icon: 'guide',
+    path: '/guide',
   },
   {
     label: '用户管理',
@@ -53,6 +63,13 @@ function handleNav(path: string) {
             <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
             <circle cx="9" cy="7" r="4" />
             <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
+          </svg>
+          <svg v-else-if="item.icon === 'guide'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M9.1 9a3 3 0 115.8 1c0 2-3 2-3 4M12 18h.01" />
+          </svg>
+          <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
           </svg>
           <span>{{ item.label }}</span>
         </button>

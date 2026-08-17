@@ -3,7 +3,7 @@ import { ref, onMounted } from 'vue';
 import axios from 'axios';
 import { useUserStore } from '../stores/user';
 import { useRouter } from 'vue-router';
-import robotImage from '../assets/robot.png';
+import robotImage from '../assets/shuaikang-ai.png';
 
 const userStore = useUserStore();
 const router = useRouter();
@@ -86,12 +86,12 @@ const loginUser = async () => {
       <!-- Logo -->
       <div class="login-card__logo">
         <div class="login-card__logo-wrapper">
-          <img :src="robotImage" alt="Logo" class="login-card__logo-img" />
+          <img :src="robotImage" alt="帅康 AI Logo" class="login-card__logo-img" />
         </div>
       </div>
 
       <!-- 标题 -->
-      <h1 class="login-card__title">欢迎使用图灵 AI</h1>
+      <h1 class="login-card__title">欢迎使用帅康 AI</h1>
       <p class="login-card__subtitle">智能问答，高效工作</p>
 
       <!-- 表单 -->
@@ -263,6 +263,8 @@ const loginUser = async () => {
 .login-card__logo-img {
   width: 56px;
   height: 56px;
+  object-fit: cover;
+  border-radius: var(--radius-xl);
 }
 
 /* 标题 */

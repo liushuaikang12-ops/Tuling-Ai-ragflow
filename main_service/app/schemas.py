@@ -1,4 +1,4 @@
-from typing import List, Optional, Any, Dict
+from typing import List, Optional, Any, Dict, Literal
 from datetime import datetime
 from pydantic import BaseModel
 
@@ -45,7 +45,8 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     query: str
     conversation_id: Optional[str] = None  # 会话 ID，为空时自动创建新会话
-    knowledge_bool: Optional[bool] = False
+    mode: Optional[Literal["agent", "knowledge", "writing"]] = "agent"
+    knowledge_bool: Optional[bool] = None  # 兼容旧版前端，mode 优先
 
 
 class ChatResponse(BaseModel):

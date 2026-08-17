@@ -8,8 +8,8 @@ def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """设置日志记录器"""
 
     # 创建日志目录
-    log_dir = Settings.LOG_DIR/Path("logs")
-    log_dir.mkdir(exist_ok=True)
+    log_dir = Settings.LOG_DIR / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
 
     # 创建记录器
     logger = logging.getLogger(name)

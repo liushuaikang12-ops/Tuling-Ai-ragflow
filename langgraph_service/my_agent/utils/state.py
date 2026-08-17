@@ -35,6 +35,7 @@ class GraphState(TypedDict, total=False):
     review: str
 
     # 前端传入的控制参数
+    mode: str
     knowledge_bool: bool
 
     # 人机交互相关字段

@@ -54,6 +54,10 @@ const toggleSources = (index: number) => {
   }
 };
 
+const openDocumentManager = () => {
+  router.push('/admin/documents');
+};
+
 const isCollapsed = (index: number) => {
   return sourcesCollapsed.value[index] !== false;
 };
@@ -176,6 +180,13 @@ watch(
             }}
           </h1>
         </div>
+        <button class="chat-view__upload-btn" @click="openDocumentManager">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 16V4M7 9l5-5 5 5" />
+            <path d="M5 20h14" />
+          </svg>
+          <span>上传文档</span>
+        </button>
       </header>
 
       <!-- 聊天消息容器 -->
@@ -190,13 +201,13 @@ watch(
           <h2 class="chat-view__empty-title">开始对话</h2>
           <p class="chat-view__empty-desc">向我提问任何问题，我会尽力为你解答</p>
           <div class="chat-view__empty-suggestions">
-            <button class="chat-view__suggestion" @click="chatStore.sendMessage('帮我解释一下量子计算', false)">
+            <button class="chat-view__suggestion" @click="chatStore.sendMessage('帮我解释一下量子计算', 'agent')">
               帮我解释一下量子计算
             </button>
-            <button class="chat-view__suggestion" @click="chatStore.sendMessage('写一首关于春天的诗', false)">
+            <button class="chat-view__suggestion" @click="chatStore.sendMessage('写一首关于春天的诗', 'writing')">
               写一首关于春天的诗
             </button>
-            <button class="chat-view__suggestion" @click="chatStore.sendMessage('如何提高编程效率？', false)">
+            <button class="chat-view__suggestion" @click="chatStore.sendMessage('如何提高编程效率？', 'agent')">
               如何提高编程效率？
             </button>
           </div>
@@ -412,6 +423,25 @@ watch(
   font-size: var(--text-lg);
   font-weight: var(--font-semibold);
   color: var(--color-text);
+}
+
+.chat-view__upload-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background-color: var(--color-accent-subtle);
+  color: var(--color-accent);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  transition: all var(--transition-fast);
+}
+
+.chat-view__upload-btn:hover {
+  background-color: var(--color-accent);
+  color: white;
 }
 
 /* 消息容器 */

@@ -14,7 +14,7 @@ class RAGApiService:
     async def upload_files(self, files: list[tuple[str, bytes]],
                            chunk_size: Optional[int] = None,
                            chunk_overlap: Optional[int] = None) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=300.0) as client:
+        async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
             multipart = [
                 ("files", (name, content, "application/octet-stream"))
                 for name, content in files
@@ -29,14 +29,14 @@ class RAGApiService:
             return resp.json()
 
     async def list_documents(self) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.get(f"{self.base_url}/documents")
             resp.raise_for_status()
             data = resp.json()
             return data.get("documents", [])
 
     async def get_document_chunks(self, doc_id: str, page: int = 1, page_size: int = 10) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.get(
                 f"{self.base_url}/chunks/{doc_id}",
                 params={"page": page, "page_size": page_size}
@@ -45,19 +45,19 @@ class RAGApiService:
             return resp.json()
 
     async def delete_document(self, doc_id: str) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.delete(f"{self.base_url}/documents/{doc_id}")
             resp.raise_for_status()
             return resp.json()
 
     async def get_chunk_config(self) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.get(f"{self.base_url}/config/chunk")
             resp.raise_for_status()
             return resp.json()
 
     async def update_chunk_config(self, chunk_size: int, chunk_overlap: int) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.put(
                 f"{self.base_url}/config/chunk",
                 json={"chunk_size": chunk_size, "chunk_overlap": chunk_overlap}
@@ -66,7 +66,7 @@ class RAGApiService:
             return resp.json()
 
     async def reset_system(self) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.post(f"{self.base_url}/reset")
             resp.raise_for_status()
             return resp.json()

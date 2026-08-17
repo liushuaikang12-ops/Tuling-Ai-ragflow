@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useUserStore } from '../stores/user';
 import { useRouter } from 'vue-router';
-import robotImage from '../assets/robot.png';
+import robotImage from '../assets/shuaikang-ai.png';
 
 const userStore = useUserStore();
 const router = useRouter();
@@ -15,8 +15,8 @@ const logout = async () => {
 <template>
   <header class="header">
     <div class="header__left">
-      <img :src="robotImage" alt="Logo" class="header__logo" />
-      <h1 class="header__title">图灵 AI</h1>
+      <img :src="robotImage" alt="帅康 AI Logo" class="header__logo" />
+      <h1 class="header__title">帅康 AI</h1>
     </div>
 
     <div class="header__right">
@@ -55,6 +55,7 @@ const logout = async () => {
 .header__logo {
   width: 32px;
   height: 32px;
+  object-fit: cover;
   border-radius: var(--radius-md);
 }
 

@@ -43,6 +43,11 @@ def get_llm() -> ChatOpenAI:
     Returns:
         配置好的 ChatOpenAI 实例
     """
+    if not Settings.API_KEY or not Settings.API_BASE_URL:
+        raise RuntimeError(
+            "写作模式需要配置 DEEPSEEK_API_KEY、DASHSCOPE_API_KEY "
+            "或通用 TEXT_MODEL_API_KEY"
+        )
     return ChatOpenAI(
         model=Settings.MODEL,
         api_key=Settings.API_KEY,

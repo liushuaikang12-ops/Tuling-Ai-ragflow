@@ -5,11 +5,13 @@ import AdminLogin from '../views/AdminLogin.vue';
 import AdminLayout from '../layouts/AdminLayout.vue';
 import DocumentManage from '../views/DocumentManage.vue';
 import UserManage from '../views/UserManage.vue';
+import UsageGuide from '../views/UsageGuide.vue';
 import { useUserStore } from '../stores/user';
 
 const routes = [
   { path: '/', component: HomeView },
   { path: '/chat/:conversationId?', component: ChatView },
+  { path: '/guide', component: UsageGuide },
   { path: '/admin', component: AdminLogin },
   {
     path: '/admin',

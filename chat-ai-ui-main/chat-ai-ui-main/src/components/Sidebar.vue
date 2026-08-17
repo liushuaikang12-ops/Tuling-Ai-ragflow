@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router';
 import { useUserStore } from '../stores/user';
 import { useChatStore } from '../stores/chat';
 import { useSidebar } from '../composables/useSidebar';
-import robotImage from '../assets/robot.png';
+import robotImage from '../assets/shuaikang-ai.png';
 
 const router = useRouter();
 const userStore = useUserStore();
@@ -66,6 +66,14 @@ const handleNewChat = () => {
   router.push('/chat');
 };
 
+const openDocumentManager = () => {
+  router.push('/admin/documents');
+};
+
+const openUsageGuide = () => {
+  router.push('/guide');
+};
+
 const handleSelectConversation = async (id: string) => {
   await chatStore.switchConversation(id);
   router.push(`/chat/${id}`);
@@ -107,8 +115,8 @@ const logout = async () => {
     <!-- 侧边栏头部 -->
     <div class="sidebar__header">
       <div class="sidebar__logo">
-        <img :src="robotImage" alt="Logo" class="sidebar__logo-img" />
-        <span class="sidebar__logo-text">图灵 AI</span>
+        <img :src="robotImage" alt="帅康 AI Logo" class="sidebar__logo-img" />
+        <span class="sidebar__logo-text">帅康 AI</span>
       </div>
       <button class="sidebar__toggle" @click="toggleSidebar" title="收起侧边栏">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -123,6 +131,33 @@ const logout = async () => {
         <path d="M12 5v14M5 12h14" />
       </svg>
       <span>新建对话</span>
+    </button>
+
+    <button
+      v-if="userStore.isAdmin"
+      class="sidebar__admin-btn"
+      @click="openDocumentManager"
+      title="上传和管理知识库文档"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+        <polyline points="14,2 14,8 20,8" />
+        <path d="M12 18v-6M9 15l3-3 3 3" />
+      </svg>
+      <span>上传与管理文档</span>
+    </button>
+
+    <button
+      class="sidebar__admin-btn"
+      @click="openUsageGuide"
+      title="查看系统架构与工作流程"
+    >
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10" />
+        <path d="M9.1 9a3 3 0 115.8 1c0 2-3 2-3 4" />
+        <path d="M12 18h.01" />
+      </svg>
+      <span>使用说明</span>
     </button>
 
     <!-- 搜索框 -->
@@ -250,6 +285,7 @@ const logout = async () => {
 .sidebar__logo-img {
   width: 32px;
   height: 32px;
+  object-fit: cover;
   border-radius: var(--radius-md);
 }
 

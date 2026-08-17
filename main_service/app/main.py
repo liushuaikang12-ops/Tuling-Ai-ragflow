@@ -35,9 +35,9 @@ def _ensure_role_column():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 先确保数据库表结构完整（包括 role 列）
-    _ensure_role_column()
+    # 全新数据库需要先建表；已有数据库再执行轻量兼容迁移。
     Base.metadata.create_all(bind=engine)
+    _ensure_role_column()
     db = SessionLocal()
     try:
         root_user = db.get(UserModel, "root")

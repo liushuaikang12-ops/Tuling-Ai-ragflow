@@ -15,11 +15,25 @@ from app.schemas import (
 from app.services import get_langgraph_service
 from app.services.conversation_repository import ConversationRepository
 from app.services.langgraph_service import LangGraphService
+from config.settings import Settings
 from db import get_db
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
 router = APIRouter()
+
+
+def ensure_chat_mode_available(mode: str | None) -> None:
+    """在进入流式响应前检查所选模式所需的外部能力。"""
+    if mode in {"agent", "writing"} and not Settings.TEXT_MODEL_CONFIGURED:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "智能体模式和写作模式需要独立的文本生成模型。"
+                "请在项目 .env 中配置 DEEPSEEK_API_KEY、DASHSCOPE_API_KEY，"
+                "或通用 TEXT_MODEL_API_KEY；现有 GLM 视觉密钥不会被用于文本任务。"
+            ),
+        )
 
 
 # ===== 会话管理 API =====
@@ -126,6 +140,8 @@ async def chat_query(
     然后把用户名作为 thread_id 传给 LangGraph，
     用于隔离不同用户的记忆与状态。
     """
+    ensure_chat_mode_available(req.mode)
+
     # 如果没有提供 conversation_id，自动创建新会话
     conversation_id = req.conversation_id
     if not conversation_id:
@@ -144,6 +160,7 @@ async def chat_query(
             thread_id=current_user.username,
             conversation_id=conversation_id,
             query=req.query,
+            mode=req.mode,
             knowledge_bool=req.knowledge_bool,
         )
         
@@ -188,6 +205,8 @@ async def chat_query_stream(
     - messages 模式：token 级别的流式输出
     - updates 模式：节点级别的状态更新
     """
+    ensure_chat_mode_available(req.mode)
+
     # 如果没有提供 conversation_id，自动创建新会话
     conversation_id = req.conversation_id
     if not conversation_id:
@@ -231,6 +250,7 @@ async def chat_query_stream(
                 thread_id=current_user.username,
                 conversation_id=conversation_id,
                 query=req.query,
+                mode=req.mode,
                 knowledge_bool=req.knowledge_bool,
             ):
                 # 检查客户端是否断开连接
