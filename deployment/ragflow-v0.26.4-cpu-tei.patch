@@ -1,0 +1,60 @@
+diff --git a/docker/docker-compose-base.yml b/docker/docker-compose-base.yml
+--- a/docker/docker-compose-base.yml
++++ b/docker/docker-compose-base.yml
+@@ -280,5 +280,16 @@ services:
+     env_file: .env
+     networks:
+       - ragflow
+-    command: ["--model-id", "/data/${TEI_MODEL}", "--auto-truncate"]
++    command:
++      [
++        "--model-id",
++        "/data/${TEI_MODEL}",
++        "--auto-truncate",
++        "--max-batch-tokens",
++        "2048",
++        "--max-client-batch-size",
++        "32",
++        "--max-concurrent-requests",
++        "64",
++      ]
+     restart: unless-stopped
+diff --git a/docker/docker-compose.yml b/docker/docker-compose.yml
+--- a/docker/docker-compose.yml
++++ b/docker/docker-compose.yml
+@@ -55,3 +55,5 @@ services:
+     volumes:
+       - ./ragflow-logs:/ragflow/logs
++      # Local CPU TEI stability patch: split document embeddings into bounded batches.
++      - ../rag/llm/embedding_model.py:/ragflow/rag/llm/embedding_model.py:ro
+       # - ./nginx/ragflow.conf:/etc/nginx/conf.d/ragflow.conf
+diff --git a/rag/llm/embedding_model.py b/rag/llm/embedding_model.py
+--- a/rag/llm/embedding_model.py
++++ b/rag/llm/embedding_model.py
+@@ -1060,9 +1060,23 @@ class HuggingFaceEmbed(Base):
+         self.base_url = base_url or "http://127.0.0.1:8080"
+ 
+     def encode(self, texts: list):
+-        response = requests.post(f"{self.base_url}/embed", json={"inputs": texts}, headers={"Content-Type": "application/json"}, timeout=30)
+-        _raise_model_exception_if_failed(response)
++        # CPU TEI can take longer than the default 30 seconds when RAGFlow sends
++        # all document chunks in one request. Split the client payload into small
++        # batches so each request stays bounded while preserving vector order.
++        batch_size = max(1, int(os.getenv("TEI_CLIENT_BATCH_SIZE", "4")))
++        timeout = max(30.0, float(os.getenv("TEI_REQUEST_TIMEOUT_SECONDS", "60")))
++
++        def _call(batch):
++            response = requests.post(
++                f"{self.base_url}/embed",
++                json={"inputs": batch},
++                headers={"Content-Type": "application/json"},
++                timeout=timeout,
++            )
++            _raise_model_exception_if_failed(response)
++            return response.json(), sum(num_tokens_from_string(text) for text in batch)
++
+         # TEI auto-truncates oversized inputs, so no client-side truncation is needed.
+-        return np.array(response.json()), sum([num_tokens_from_string(text) for text in texts])
++        return self._batched_encode(texts, _call, batch_size=batch_size)
+ 
+     def encode_queries(self, text: str):

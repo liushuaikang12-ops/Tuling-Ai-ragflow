@@ -408,6 +408,8 @@ no_proxy=127.0.0.1,localhost
 
 不要提交 `.env`。仓库中的 `.env.example` 只包含占位符。
 
+如果使用 RAGFlow v0.26.4 的 CPU TEI，文档 Chunk 数超过默认客户端批量上限，或本地 Qwen3 Embedding 单批处理超过 30 秒时，解析会在向量化阶段失败。本仓库提供了可复现的 [CPU TEI 稳定性补丁](deployment/README.md)，将请求拆成小批次并延长单批超时。
+
 ### 3. 启动 PostgreSQL
 
 ```powershell
