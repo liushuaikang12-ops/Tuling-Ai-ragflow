@@ -14,9 +14,26 @@ class Settings:
     PROJECT_ROOT: Path = PROJECT_ROOT
     LOG_DIR: Path = PROJECT_ROOT / "file"
 
-    API_KEY: Optional[str] = os.getenv("DASHSCOPE_API_KEY")
-    API_BASE_URL: Optional[str] = os.getenv("DASHSCOPE_BASE_URL")
-    MODEL: str = os.getenv("DASHSCOPE_MODEL", "qwen-plus")
+    DEEPSEEK_API_KEY: Optional[str] = os.getenv("DEEPSEEK_API_KEY")
+    DASHSCOPE_API_KEY: Optional[str] = os.getenv("DASHSCOPE_API_KEY")
+
+    # 与 LangGraph 服务保持一致：优先使用通用 OpenAI 兼容配置，其次
+    # 自动选择 DeepSeek，最后回退到 DashScope。
+    API_KEY: Optional[str] = (
+        os.getenv("TEXT_MODEL_API_KEY")
+        or DEEPSEEK_API_KEY
+        or DASHSCOPE_API_KEY
+    )
+    API_BASE_URL: Optional[str] = os.getenv("TEXT_MODEL_BASE_URL") or (
+        os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        if DEEPSEEK_API_KEY
+        else os.getenv("DASHSCOPE_BASE_URL")
+    )
+    MODEL: str = os.getenv("TEXT_MODEL_MODEL") or (
+        os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+        if DEEPSEEK_API_KEY
+        else os.getenv("DASHSCOPE_MODEL", "qwen-plus")
+    )
     TEMPERATURE: float = float(os.getenv("MODEL_TEMPERATURE", "0.1"))
     EMBEDDING_MODEL_PATH: str = os.getenv(
         "EMBEDDING_MODEL_PATH",

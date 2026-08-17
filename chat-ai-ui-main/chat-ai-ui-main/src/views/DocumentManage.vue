@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from 'vue';
+import { ref, reactive, onMounted, onBeforeUnmount, computed } from 'vue';
 import axios from 'axios';
 
 const VITE_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -10,6 +10,10 @@ interface DocInfo {
   file_type: string;
   file_size: number;
   upload_time: string;
+  status?: string | number;
+  progress?: number;
+  progress_msg?: string;
+  chunk_count?: number;
 }
 
 interface ChunkItem {
@@ -56,6 +60,7 @@ const configDialogVisible = ref(false);
 const message = ref('');
 const messageType = ref<'success' | 'error'>('success');
 const messageVisible = ref(false);
+let progressPollTimer: ReturnType<typeof setTimeout> | null = null;
 
 function showMessage(text: string, type: 'success' | 'error' = 'success') {
   message.value = text;
@@ -91,15 +96,58 @@ function getFileIcon(fileType: string): string {
   return '📄';
 }
 
-async function loadDocuments() {
-  loading.value = true;
+function normalizedStatus(doc: DocInfo): string {
+  return String(doc.status ?? '').trim().toUpperCase();
+}
+
+function isParsing(doc: DocInfo): boolean {
+  return ['UNSTART', 'RUNNING', 'PARSING', 'PENDING', 'QUEUED'].includes(normalizedStatus(doc));
+}
+
+function progressPercent(doc: DocInfo): number {
+  const raw = Number(doc.progress);
+  if (!Number.isFinite(raw)) return isParsing(doc) ? 0 : 100;
+  return Math.max(0, Math.min(100, Math.round(raw <= 1 ? raw * 100 : raw)));
+}
+
+function statusLabel(doc: DocInfo): string {
+  const status = normalizedStatus(doc);
+  if (status === 'DONE') return '解析完成';
+  if (status === 'FAIL') return '解析失败';
+  if (status === 'CANCEL') return '已取消';
+  if (isParsing(doc)) return `解析中 ${progressPercent(doc)}%`;
+  return status || '状态未知';
+}
+
+function statusClass(doc: DocInfo): string {
+  const status = normalizedStatus(doc);
+  if (status === 'DONE') return 'done';
+  if (status === 'FAIL' || status === 'CANCEL') return 'failed';
+  return isParsing(doc) ? 'parsing' : 'unknown';
+}
+
+function scheduleProgressPoll() {
+  if (progressPollTimer) clearTimeout(progressPollTimer);
+  progressPollTimer = null;
+  if (documents.value.some(isParsing)) {
+    progressPollTimer = setTimeout(() => loadDocuments(true), 2000);
+  }
+}
+
+async function loadDocuments(silent = false) {
+  if (!silent) loading.value = true;
   try {
     const resp = await axios.get(`${VITE_API_URL}/api/docs/list`);
     documents.value = resp.data.documents || [];
+    scheduleProgressPoll();
   } catch (err: any) {
-    showMessage('加载文档列表失败: ' + (err.response?.data?.detail || err.message), 'error');
+    if (!silent) {
+      showMessage('加载文档列表失败: ' + (err.response?.data?.detail || err.message), 'error');
+    } else {
+      progressPollTimer = setTimeout(() => loadDocuments(true), 4000);
+    }
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
@@ -222,6 +270,10 @@ onMounted(() => {
   loadDocuments();
   loadChunkConfig();
 });
+
+onBeforeUnmount(() => {
+  if (progressPollTimer) clearTimeout(progressPollTimer);
+});
 </script>
 
 <template>
@@ -323,6 +375,8 @@ onMounted(() => {
                 <th>类型</th>
                 <th>大小</th>
                 <th>上传时间</th>
+                <th>解析状态</th>
+                <th>Chunk</th>
                 <th>操作</th>
               </tr>
             </thead>
@@ -335,6 +389,19 @@ onMounted(() => {
                 <td>{{ doc.file_type || '-' }}</td>
                 <td>{{ formatFileSize(doc.file_size) }}</td>
                 <td>{{ formatTime(doc.upload_time) }}</td>
+                <td class="doc-manage__td-status">
+                  <div class="doc-manage__status-row">
+                    <span class="doc-manage__status-dot" :class="`doc-manage__status-dot--${statusClass(doc)}`"></span>
+                    <span>{{ statusLabel(doc) }}</span>
+                  </div>
+                  <div v-if="isParsing(doc)" class="doc-manage__progress" :title="doc.progress_msg || statusLabel(doc)">
+                    <span :style="{ width: `${progressPercent(doc)}%` }"></span>
+                  </div>
+                  <div v-if="doc.progress_msg" class="doc-manage__progress-message" :title="doc.progress_msg">
+                    {{ doc.progress_msg }}
+                  </div>
+                </td>
+                <td>{{ doc.chunk_count ?? 0 }}</td>
                 <td class="doc-manage__td-actions">
                   <button class="doc-manage__action-btn doc-manage__action-btn--view" @click="viewChunks(doc)" title="查看分块">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -816,6 +883,65 @@ onMounted(() => {
   font-size: var(--text-lg);
 }
 
+.doc-manage__td-status {
+  min-width: 180px;
+}
+
+.doc-manage__status-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}
+
+.doc-manage__status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--color-text-tertiary);
+}
+
+.doc-manage__status-dot--done {
+  background: var(--color-success);
+}
+
+.doc-manage__status-dot--parsing {
+  background: var(--color-accent);
+  box-shadow: 0 0 0 4px var(--color-accent-subtle);
+}
+
+.doc-manage__status-dot--failed {
+  background: var(--color-error);
+}
+
+.doc-manage__progress {
+  width: 150px;
+  height: 5px;
+  margin-top: var(--space-2);
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-border);
+}
+
+.doc-manage__progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-light));
+  transition: width 0.3s ease;
+}
+
+.doc-manage__progress-message {
+  max-width: 220px;
+  margin-top: var(--space-1);
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .doc-manage__td-actions {
   display: flex;
   gap: var(--space-2);
@@ -1196,7 +1322,9 @@ onMounted(() => {
   .doc-manage__table th:nth-child(3),
   .doc-manage__table td:nth-child(3),
   .doc-manage__table th:nth-child(4),
-  .doc-manage__table td:nth-child(4) {
+  .doc-manage__table td:nth-child(4),
+  .doc-manage__table th:nth-child(6),
+  .doc-manage__table td:nth-child(6) {
     display: none;
   }
 }
