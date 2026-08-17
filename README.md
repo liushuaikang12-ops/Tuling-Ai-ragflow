@@ -442,7 +442,7 @@ uv pip install --python rag_api_service/.venv -r rag_api_service/requirements-le
 ```powershell
 uv run --project rag_api_service python rag_api_service/run.py
 uv run --project mcp_service python mcp_service/run.py
-uv run --project langgraph_service langgraph dev --config langgraph_service/langgraph.json
+uv run --project langgraph_service langgraph dev --config langgraph_service/langgraph.json --no-reload --no-browser
 uv run --project main_service python main_service/run.py
 
 cd chat-ai-ui-main/chat-ai-ui-main

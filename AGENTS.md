@@ -7,7 +7,7 @@
 | `chat-ai-ui-main/` | `npm run dev` | `:5173` | Vue 3, TypeScript, Vite 6, Element Plus 2, Tailwind CSS 4, Pinia 3, Axios, Vue Router, Marked, Highlight.js |
 | `rag_api_service/` | `uv run --project rag_api_service python rag_api_service/run.py` | `:8011` | FastAPI 知识库适配层；支持 RAGFlow 或原有 LlamaIndex/Chroma/BM25 后端 |
 | `mcp_service/` | `uv run --project mcp_service python mcp_service/run.py` | `:8010/mcp` | FastMCP 纯代理，HTTP 调 rag_api_service |
-| `langgraph_service/` | `uv run --project langgraph_service langgraph dev --config langgraph_service/langgraph.json` | `:2024` | LangGraph, LangMem, LangChain-Tavily, MCP Adapters, PostgreSQL checkpointer |
+| `langgraph_service/` | `uv run --project langgraph_service langgraph dev --config langgraph_service/langgraph.json --no-reload --no-browser` | `:2024` | LangGraph, LangMem, LangChain-Tavily, MCP Adapters, PostgreSQL checkpointer |
 | `main_service/` | `uv run --project main_service python main_service/run.py` | `:8000` | FastAPI, SQLAlchemy, PyJWT, pwdlib[argon2], langgraph-sdk |
 
 **启动顺序**: rag_api_service → mcp_service → langgraph_service → main_service → chat-ai-ui-main.
@@ -89,7 +89,7 @@ cd chat-ai-ui-main/chat-ai-ui-main && npm install && cd ../..
 # 按顺序启动（使用 uv run）
 uv run --project rag_api_service python rag_api_service/run.py          # :8011
 uv run --project mcp_service python mcp_service/run.py                  # :8010/mcp
-uv run --project langgraph_service langgraph dev --config langgraph_service/langgraph.json  # :2024
+uv run --project langgraph_service langgraph dev --config langgraph_service/langgraph.json --no-reload --no-browser  # :2024
 uv run --project main_service python main_service/run.py                # :8000
 
 # 启动前端（新终端）

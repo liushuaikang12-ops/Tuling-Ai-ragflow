@@ -105,7 +105,7 @@ knowledge_agent → MCP over HTTP → mcp_service:query_rag → HTTP REST → ra
 推荐在项目根目录执行：
 
 ```bash
-uv run --project langgraph_service langgraph dev --config langgraph_service/langgraph.json
+uv run --project langgraph_service langgraph dev --config langgraph_service/langgraph.json --no-reload --no-browser
 ```
 
 配置文件中的图入口为：

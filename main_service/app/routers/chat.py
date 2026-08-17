@@ -413,6 +413,7 @@ async def get_user_history(
     conversation_id: str,
     current_user: User = Depends(get_current_active_user),
     svc: LangGraphService = Depends(get_langgraph_service),
+    db: Session = Depends(get_db),
 ) -> List[ChatMessage]:
     """
     获取当前用户指定会话的历史消息。
@@ -420,10 +421,22 @@ async def get_user_history(
     这里读取的是 LangGraph thread state 里的 messages，
     也就是"短期记忆"部分，而不是你额外存到 PostgreSQL 长期记忆表里的内容。
     """
+    if ConversationRepository(db).get(conversation_id, current_user.username) is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
     try:
-        chat_history = await svc.get_history(
-            thread_id=current_user.username,
-            conversation_id=conversation_id,
+        chat_history = await asyncio.wait_for(
+            svc.get_history(
+                thread_id=current_user.username,
+                conversation_id=conversation_id,
+            ),
+            timeout=15.0,
+        )
+    except asyncio.TimeoutError:
+        logger.error("读取历史会话超时: conversation_id=%s", conversation_id)
+        raise HTTPException(
+            status_code=504,
+            detail="历史服务响应超时，请稍后重试",
         )
     except Exception as e:
         logger.error(str(e))

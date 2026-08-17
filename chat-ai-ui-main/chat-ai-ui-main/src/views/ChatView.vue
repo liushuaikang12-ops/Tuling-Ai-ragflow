@@ -191,8 +191,20 @@ watch(
 
       <!-- 聊天消息容器 -->
       <div id="chat-container" class="chat-view__messages">
+        <div v-if="chatStore.isHistoryLoading" class="chat-view__history-state">
+          <div class="chat-view__history-spinner"></div>
+          <h2>正在加载历史对话</h2>
+          <p>正在从会话状态中恢复消息与来源…</p>
+        </div>
+
+        <div v-else-if="chatStore.historyError" class="chat-view__history-state chat-view__history-state--error">
+          <h2>历史对话加载失败</h2>
+          <p>{{ chatStore.historyError }}</p>
+          <button type="button" @click="chatStore.loadChatHistory()">重新加载</button>
+        </div>
+
         <!-- 空状态 -->
-        <div v-if="chatStore.messages.length === 0" class="chat-view__empty">
+        <div v-else-if="chatStore.messages.length === 0" class="chat-view__empty">
           <div class="chat-view__empty-icon">
             <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
@@ -454,6 +466,54 @@ watch(
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+
+.chat-view__history-state {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.chat-view__history-state h2 {
+  color: var(--color-primary);
+  font-size: var(--text-xl);
+}
+
+.chat-view__history-state p {
+  max-width: 520px;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+}
+
+.chat-view__history-state button {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-accent);
+  color: white;
+  font-size: var(--text-sm);
+}
+
+.chat-view__history-state--error h2 {
+  color: var(--color-error);
+}
+
+.chat-view__history-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: history-spin 0.8s linear infinite;
+}
+
+@keyframes history-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* 空状态 */

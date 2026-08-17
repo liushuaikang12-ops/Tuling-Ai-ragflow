@@ -75,6 +75,9 @@ export const useChatStore = defineStore('chat', () => {
   // 会话相关状态
   const conversations = ref<Conversation[]>([]);
   const currentConversationId = ref<string | null>(null);
+  const isHistoryLoading = ref(false);
+  const historyError = ref('');
+  let historyRequestId = 0;
 
   // 文章撰写相关状态
   const articleContent = ref('');  // 文章内容
@@ -124,6 +127,7 @@ export const useChatStore = defineStore('chat', () => {
       conversations.value.unshift(newConversation);
       currentConversationId.value = newConversation.id;
       messages.value = [];
+      historyError.value = '';
       return newConversation.id;
     } catch (error) {
       console.error('Error creating conversation:', error);
@@ -135,10 +139,13 @@ export const useChatStore = defineStore('chat', () => {
    * 切换会话
    */
   const switchConversation = async (conversationId: string) => {
-    if (currentConversationId.value === conversationId) return;
+    const isSameConversation = currentConversationId.value === conversationId;
+    // 同一个会话在消息为空或上次加载失败时也必须重新请求历史。
+    // 否则从说明页返回、刷新路由或请求失败后再次点击都会“没有反应”。
+    if (isSameConversation && messages.value.length > 0 && !historyError.value) return;
     currentConversationId.value = conversationId;
     messages.value = [];
-    await loadChatHistory();
+    await loadChatHistory(conversationId);
   };
 
   /**
@@ -191,21 +198,44 @@ export const useChatStore = defineStore('chat', () => {
   /**
    * 获取历史消息接口调用
    */
-  const loadChatHistory = async () => {
-    if (!userStore.token || !currentConversationId.value) return;
+  const loadChatHistory = async (conversationId = currentConversationId.value) => {
+    if (!userStore.token || !conversationId) return;
 
+    const requestId = ++historyRequestId;
+    isHistoryLoading.value = true;
+    historyError.value = '';
     try {
       const { data } = await axios.get(
         `${import.meta.env.VITE_API_URL}/api/chat/history`,
         {
-          params: { conversation_id: currentConversationId.value },
-          headers: { 'Authorization': `Bearer ${userStore.token}` }
+          params: { conversation_id: conversationId },
+          headers: { 'Authorization': `Bearer ${userStore.token}` },
+          timeout: 20000,
         }
       );
-      messages.value = data.filter((msg: ChatMessage) => msg);
-    } catch (error) {
+      // 用户快速切换会话时，忽略较早请求的迟到响应。
+      if (requestId === historyRequestId && currentConversationId.value === conversationId) {
+        messages.value = Array.isArray(data)
+          ? data.filter((msg: ChatMessage) => msg && msg.content)
+          : [];
+      }
+    } catch (error: any) {
       console.error('Error loading chat history:', error);
+      if (requestId === historyRequestId && currentConversationId.value === conversationId) {
+        historyError.value = error.response?.data?.detail
+          || (error.code === 'ECONNABORTED' ? '历史记录加载超时，请重试' : '历史记录加载失败，请重试');
+      }
+    } finally {
+      if (requestId === historyRequestId) isHistoryLoading.value = false;
     }
+  };
+
+  const startNewConversation = () => {
+    historyRequestId += 1;
+    currentConversationId.value = null;
+    messages.value = [];
+    isHistoryLoading.value = false;
+    historyError.value = '';
   };
 
   /**
@@ -793,6 +823,8 @@ export const useChatStore = defineStore('chat', () => {
     // 会话相关状态
     conversations,
     currentConversationId,
+    isHistoryLoading,
+    historyError,
     // 文章相关状态
     articleContent,
     isArticleWriting,
@@ -801,6 +833,7 @@ export const useChatStore = defineStore('chat', () => {
     loadConversations,
     createConversation,
     switchConversation,
+    startNewConversation,
     deleteConversation,
     renameConversation,
     // 聊天方法
@@ -816,6 +849,9 @@ export const useChatStore = defineStore('chat', () => {
       messages.value = [];
       conversations.value = [];
       currentConversationId.value = null;
+      isHistoryLoading.value = false;
+      historyError.value = '';
+      historyRequestId += 1;
       articleContent.value = '';
       isArticleWriting.value = false;
       currentNode.value = '';

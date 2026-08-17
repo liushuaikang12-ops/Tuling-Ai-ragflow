@@ -61,8 +61,7 @@ onMounted(async () => {
 });
 
 const handleNewChat = () => {
-  chatStore.currentConversationId = null;
-  chatStore.messages = [];
+  chatStore.startNewConversation();
   router.push('/chat');
 };
 
