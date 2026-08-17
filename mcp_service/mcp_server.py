@@ -7,7 +7,7 @@ from fastmcp import FastMCP
 
 from config.settings import Settings
 
-mcp = FastMCP("llamaindex-rag")
+mcp = FastMCP("tuling-rag")
 RAG_API_URL = f"http://{Settings.RAG_API_HOST}:{Settings.RAG_API_PORT}/api/docs"
 
 
