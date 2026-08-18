@@ -34,6 +34,17 @@ interface McpCard {
   tools: string[];
 }
 
+type EnhancementId = 'metadata' | 'keywords' | 'questions';
+
+interface EnhancementOption {
+  id: EnhancementId;
+  name: string;
+  implementation: string;
+  description: string;
+  retrievalValue: string;
+  cost: string;
+}
+
 const router = useRouter();
 const userStore = useUserStore();
 const { isExpanded, toggleSidebar } = useSidebar();
@@ -373,8 +384,36 @@ const tabs: Array<{ id: GuideTab; label: string; index: string }> = [
   { id: 'ragflow', label: 'RAGFlow 文档解析', index: '04' },
 ];
 
+const enhancementOptions: EnhancementOption[] = [
+  {
+    id: 'metadata',
+    name: '自动元数据',
+    implementation: 'MetadataExtractor + 自定义字段提取器',
+    description: '从 Chunk 中提取年份、部门、文档类型和分类标签，写入 metadata。',
+    retrievalValue: '查询时可先按年份或分类过滤，再做向量与 BM25 召回。',
+    cost: '每批 Chunk 增加一次或多次 LLM 提取',
+  },
+  {
+    id: 'keywords',
+    name: '自动关键词',
+    implementation: 'KeywordExtractor',
+    description: '为每个 Chunk 生成主题词、同义词和关键实体，补充原文没有直接出现的检索词。',
+    retrievalValue: '增强 BM25 和混合检索对简称、术语及同义表达的命中能力。',
+    cost: '增加 LLM Token，并扩大索引字段',
+  },
+  {
+    id: 'questions',
+    name: '自动问题提取（反向出题）',
+    implementation: 'QuestionsAnsweredExtractor',
+    description: '让 LLM 为每个 Chunk 生成它能够回答的假设问题，并随节点一起建立索引。',
+    retrievalValue: '把“用户问题”与“假设问题”匹配，可改善口语化问题和原文陈述句之间的语义召回。',
+    cost: '三项中计算与 Token 开销通常最高',
+  },
+];
+
 const activeTab = ref<GuideTab>('modes');
 const activeMode = ref<ModeId>('agent');
+const enabledEnhancements = ref<EnhancementId[]>([]);
 const activeNodeIndex = ref(0);
 const playing = ref(true);
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -390,6 +429,19 @@ const currentFlow = computed<FlowScenario>(() => {
 const activeNode = computed(() => currentFlow.value.nodes[activeNodeIndex.value]);
 const completedNodes = computed(() => currentFlow.value.nodes.slice(0, activeNodeIndex.value + 1));
 const progress = computed(() => ((activeNodeIndex.value + 1) / currentFlow.value.nodes.length) * 100);
+const selectedEnhancements = computed(() => enhancementOptions.filter(option => enabledEnhancements.value.includes(option.id)));
+const enhancementRoute = computed(() => {
+  const selected = selectedEnhancements.value.map(option => option.name);
+  return selected.length
+    ? `Node[] → ${selected.join(' → ')} → Embedding → Chroma + BM25`
+    : 'Node[] → Embedding → Chroma + BM25（当前基础链路）';
+});
+
+function toggleEnhancement(id: EnhancementId) {
+  enabledEnhancements.value = enabledEnhancements.value.includes(id)
+    ? enabledEnhancements.value.filter(item => item !== id)
+    : [...enabledEnhancements.value, id];
+}
 
 function stopTimer() {
   if (timer) clearInterval(timer);
@@ -579,6 +631,54 @@ onBeforeUnmount(stopTimer);
             <article><strong>Index / Retriever</strong><p>Index 保存“如何找到 Node”；Retriever 根据问题从索引中取回相关 Node。</p></article>
           </div>
           <div class="boundary-note"><strong>当前边界：</strong>这套 LlamaIndex 链路只是 Legacy 备用实现；默认 RAGFlow 模式负责解析、分块、索引和检索，两套实现不会同时加载。</div>
+
+          <div class="enhancement-heading">
+            <div class="section-heading"><span>可选能力设计</span><h2>高级提效开关：用额外算力换取更丰富的检索信号</h2></div>
+            <p>点击左侧开关查看它会在 LlamaIndex 摄取管道中增加什么。这里是架构演示，不会修改当前服务配置。</p>
+          </div>
+          <div class="enhancement-lab">
+            <aside class="enhancement-switches" aria-label="LlamaIndex 高级提效开关">
+              <div class="enhancement-switches__header">
+                <strong>高级提效开关</strong>
+                <span>消耗算力换准确度</span>
+              </div>
+              <button
+                v-for="option in enhancementOptions"
+                :key="option.id"
+                type="button"
+                :class="{ enabled: enabledEnhancements.includes(option.id) }"
+                :aria-pressed="enabledEnhancements.includes(option.id)"
+                @click="toggleEnhancement(option.id)"
+              >
+                <span class="enhancement-switch" aria-hidden="true"><i></i></span>
+                <span class="enhancement-switch__copy">
+                  <strong>{{ option.name }}</strong>
+                  <small>{{ option.implementation }}</small>
+                </span>
+              </button>
+              <div class="enhancement-switches__status">当前仓库状态：待接入上传配置</div>
+            </aside>
+
+            <div class="enhancement-preview">
+              <div class="enhancement-preview__header">
+                <div><span>管道预览</span><h3>{{ selectedEnhancements.length ? `已开启 ${selectedEnhancements.length} 项增强` : '使用当前基础链路' }}</h3></div>
+                <span class="demo-badge">说明演示</span>
+              </div>
+              <code>{{ enhancementRoute }}</code>
+              <div v-if="selectedEnhancements.length" class="enhancement-results">
+                <article v-for="option in selectedEnhancements" :key="`preview-${option.id}`">
+                  <strong>{{ option.name }}</strong>
+                  <p>{{ option.description }}</p>
+                  <dl><dt>检索收益</dt><dd>{{ option.retrievalValue }}</dd><dt>额外成本</dt><dd>{{ option.cost }}</dd></dl>
+                </article>
+              </div>
+              <div v-else class="enhancement-empty">
+                <strong>当前 Legacy 代码实际启用的能力</strong>
+                <p>SentenceSplitter / MarkdownNodeParser → TitleExtractor → Embedding。自动年份分类、关键词和反向问题尚未进入运行管道。</p>
+              </div>
+              <p class="accuracy-note">注意：反向出题通常能改善特定问法的语义召回，但“准确率断崖式领先”不能直接作为结论；需要用本项目问题集对 Recall@K、MRR 和最终答案正确率做对照评测。</p>
+            </div>
+          </div>
         </section>
 
         <section v-if="activeTab === 'mcp'" class="mcp-section">
@@ -684,6 +784,36 @@ onBeforeUnmount(stopTimer);
 .mcp-grid ul { margin-top: var(--space-3); padding-left: 18px; color: var(--color-text-secondary); font-size: var(--text-xs); line-height: 1.75; }
 .boundary-note { margin-top: var(--space-4); padding: var(--space-4) var(--space-5); border-left: 3px solid var(--color-warning); border-radius: 0 var(--radius-md) var(--radius-md) 0; background: color-mix(in srgb, var(--color-warning) 8%, var(--color-bg-elevated)); color: var(--color-text-secondary); font-size: var(--text-sm); line-height: 1.75; }
 .boundary-note strong { color: var(--color-warning); }
+.enhancement-heading { display: flex; align-items: end; justify-content: space-between; gap: var(--space-6); margin-top: var(--space-10); }
+.enhancement-heading > p { max-width: 430px; color: var(--color-text-tertiary); font-size: var(--text-sm); line-height: 1.7; }
+.enhancement-lab { display: grid; grid-template-columns: minmax(280px, .7fr) minmax(0, 1.3fr); gap: var(--space-4); margin-top: var(--space-5); }
+.enhancement-switches, .enhancement-preview { padding: var(--space-5); border: 1px solid var(--color-border); border-radius: var(--radius-xl); background: var(--color-bg-elevated); }
+.enhancement-switches__header { display: flex; flex-direction: column; gap: 3px; margin-bottom: var(--space-4); }
+.enhancement-switches__header strong { color: var(--color-primary); }
+.enhancement-switches__header span { color: var(--color-text-tertiary); font-size: var(--text-xs); }
+.enhancement-switches button { display: flex; width: 100%; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; text-align: left; border-top: 1px solid var(--color-border); color: var(--color-text); }
+.enhancement-switches button.enabled .enhancement-switch { border-color: var(--color-accent); background: var(--color-accent); }
+.enhancement-switches button.enabled .enhancement-switch i { transform: translateX(18px); }
+.enhancement-switch { position: relative; width: 42px; height: 24px; flex: 0 0 42px; border: 1px solid var(--color-border); border-radius: var(--radius-full); background: var(--color-bg-tertiary); transition: all var(--transition-fast); }
+.enhancement-switch i { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: white; box-shadow: 0 1px 4px rgba(15, 23, 42, .24); transition: transform var(--transition-fast); }
+.enhancement-switch__copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.enhancement-switch__copy strong { font-size: var(--text-sm); }
+.enhancement-switch__copy small { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 10px; line-height: 1.5; }
+.enhancement-switches__status { margin-top: var(--space-3); padding: var(--space-3); border-radius: var(--radius-md); background: color-mix(in srgb, var(--color-warning) 8%, var(--color-bg-secondary)); color: var(--color-warning); font-size: var(--text-xs); }
+.enhancement-preview__header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.enhancement-preview__header > div > span { color: var(--color-accent); font-size: var(--text-xs); font-weight: var(--font-semibold); }
+.enhancement-preview__header h3 { margin-top: 3px; color: var(--color-primary); font-size: var(--text-lg); }
+.demo-badge { padding: 4px 9px; border-radius: var(--radius-full); background: var(--color-accent-subtle); color: var(--color-accent); font-size: 10px; }
+.enhancement-preview > code { display: block; margin-top: var(--space-4); padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-bg-secondary); color: var(--color-text-secondary); font-size: var(--text-xs); line-height: 1.65; white-space: normal; }
+.enhancement-results { display: grid; gap: var(--space-3); margin-top: var(--space-4); }
+.enhancement-results article, .enhancement-empty { padding: var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-bg); }
+.enhancement-results article > strong, .enhancement-empty strong { color: var(--color-primary); }
+.enhancement-results article > p, .enhancement-empty p { margin-top: var(--space-2); color: var(--color-text-secondary); font-size: var(--text-sm); line-height: 1.65; }
+.enhancement-results dl { display: grid; grid-template-columns: 64px 1fr; gap: 5px var(--space-3); margin-top: var(--space-3); font-size: var(--text-xs); line-height: 1.6; }
+.enhancement-results dt { color: var(--color-text-tertiary); }
+.enhancement-results dd { color: var(--color-text-secondary); }
+.enhancement-empty { margin-top: var(--space-4); }
+.accuracy-note { margin-top: var(--space-4); color: var(--color-text-tertiary); font-size: var(--text-xs); line-height: 1.7; }
 button:hover:not(:disabled) { border-color: var(--color-accent); }
 
 @media (max-width: 1120px) {
@@ -695,7 +825,8 @@ button:hover:not(:disabled) { border-color: var(--color-accent); }
   .guide-content { width: min(100% - 28px, 1380px); padding-top: var(--space-6); }
   .guide-header { padding-inline: var(--space-4); }
   .guide-header__title span { display: none; }
-  .mode-picker, .task-card, .flow-board, .io-grid, .concept-grid, .mcp-grid { grid-template-columns: 1fr; }
+  .mode-picker, .task-card, .flow-board, .io-grid, .concept-grid, .mcp-grid, .enhancement-lab { grid-template-columns: 1fr; }
+  .enhancement-heading { align-items: flex-start; flex-direction: column; }
   .node-stage { min-height: 560px; }
   .execution-log { grid-column: auto; }
   .execution-log ol { display: flex; }
