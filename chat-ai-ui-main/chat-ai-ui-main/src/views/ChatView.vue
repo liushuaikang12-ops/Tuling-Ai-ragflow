@@ -11,6 +11,7 @@ import TypingIndicator from '../components/TypingIndicator.vue';
 import { marked } from 'marked';
 import hljs from 'highlight.js';
 import { markedHighlight } from 'marked-highlight';
+import { renderMarkdownWithMath } from '../utils/markdownMath';
 
 const userStore = useUserStore();
 const chatStore = useChatStore();
@@ -65,7 +66,7 @@ const isCollapsed = (index: number) => {
 const renderSourceContent = (text: string) => {
   if (!text) return '';
   try {
-    return marked.parse(text);
+    return renderMarkdownWithMath(text, value => String(marked.parse(value)));
   } catch (e) {
     console.error('Markdown parsing error:', e);
     return text;

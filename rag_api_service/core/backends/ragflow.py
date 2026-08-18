@@ -7,6 +7,7 @@ import httpx
 
 from config.settings import Settings
 from core.ragflow_client import RAGFlowClient
+from core.text_normalization import normalize_pdf_symbol_text
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -105,7 +106,7 @@ class RAGFlowBackend:
         for chunk in raw_chunks:
             if not isinstance(chunk, dict):
                 continue
-            content = str(chunk.get("content") or "")
+            content = normalize_pdf_symbol_text(str(chunk.get("content") or ""))
             chunks.append(
                 {
                     "chunk_id": str(chunk.get("id") or ""),
@@ -165,7 +166,7 @@ class RAGFlowBackend:
         name = str(
             chunk.get("document_name") or chunk.get("docnm_kwd") or "未知文档"
         )
-        content = str(chunk.get("content") or "")
+        content = normalize_pdf_symbol_text(str(chunk.get("content") or ""))
         score = chunk.get("similarity")
         score_text = (
             f" (相似度: {float(score) * 100:.1f}%)"
@@ -184,7 +185,9 @@ class RAGFlowBackend:
         if not Settings.API_KEY or not Settings.API_BASE_URL:
             excerpts = []
             for index, chunk in enumerate(chunks[:3], 1):
-                content = str(chunk.get("content") or "").strip()
+                content = normalize_pdf_symbol_text(
+                    str(chunk.get("content") or "")
+                ).strip()
                 if content:
                     excerpts.append(f"[{index}] {content}")
             return (
@@ -200,7 +203,7 @@ class RAGFlowBackend:
                 or chunk.get("docnm_kwd")
                 or "未知文档"
             )
-            content = str(chunk.get("content") or "")
+            content = normalize_pdf_symbol_text(str(chunk.get("content") or ""))
             part = f"[{index}] 来源：{name}\n{content}"
             if used_chars + len(part) > Settings.RAGFLOW_GENERATION_MAX_CONTEXT_CHARS:
                 break

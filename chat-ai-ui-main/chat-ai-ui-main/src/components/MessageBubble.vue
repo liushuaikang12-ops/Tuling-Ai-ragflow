@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import { marked } from 'marked';
 import hljs from 'highlight.js';
 import { markedHighlight } from 'marked-highlight';
+import { renderMarkdownWithMath } from '../utils/markdownMath';
 
 interface Props {
   role: 'human' | 'ai';
@@ -50,7 +51,7 @@ const formattedContent = computed(() => {
       .replace(/\n/g, '<br>');
   }
   
-  return marked(props.content);
+  return renderMarkdownWithMath(props.content, value => String(marked(value)));
 });
 
 const animationStyle = computed(() => ({
