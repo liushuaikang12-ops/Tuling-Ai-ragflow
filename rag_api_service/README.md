@@ -108,6 +108,16 @@ RAGFlow 模式下的调用关系：
 
 RAGFlow 内置解析器用 `chunk_token_num` 控制分块大小，没有与 legacy `chunk_overlap` 完全等价的参数；RAGFlow 模式下接口会返回 `chunk_overlap=0`。
 
+### 编号公式转写
+
+自托管 RAGFlow 可加载 `deployment/docker-compose.ragflow-formula.yml`。解析完成后，
+适配层会审计带编号的公式 Chunk：已有可信 LaTeX 时直接规范化；只有扁平 OCR 时，
+通过受 Dataset 权限保护的 `/api/v1/datasets/{dataset_id}/formula-vision` 读取公式
+裁剪图，并调用 RAGFlow 中配置的默认 `IMAGE2TEXT` 模型转写。结果以
+`名称 + 编号 + 文档 + PDF 页码 + 原文上下文 + LaTeX` 写回原 Chunk，并重新建立
+检索向量。`GET /api/docs/chunks/{doc_id}` 会返回 `formula_format`、
+`formula_name` 和 `equation_numbers` 元数据。
+
 ## 5. 启动方式
 
 在项目根目录执行：

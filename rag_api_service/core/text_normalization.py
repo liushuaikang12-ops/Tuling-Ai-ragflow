@@ -60,6 +60,10 @@ _DUPLICATED_EQUATION_LABEL_RE = re.compile(
 )
 _EQUATION_LABEL_RE = re.compile(r"[（(]\s*(\d+(?:\.\d+)+)\s*[）)]")
 _LATEX_TAG_RE = re.compile(r"\\tag\{\s*(\d+(?:\.\d+)+)\s*\}")
+_FORMULA_NUMBER_METADATA_RE = re.compile(
+    r"^\s*-\s*公式编号：\s*[（(]\s*(\d+(?:\.\d+)+)\s*[）)]\s*$",
+    re.MULTILINE,
+)
 _NEXT_ASSIGNMENT_RE = re.compile(
     r",\s+(?=(?:\\[A-Za-z]+(?:_\{?\w+\}?)?|"
     r"[A-Za-z](?:\^\{[^}]+\}|_\{?\w+\}?)?)\s*=)"
@@ -152,14 +156,15 @@ def standardize_formula_markdown(text: str) -> FormulaNormalization:
     """
 
     normalized = normalize_pdf_symbol_text(text)
-    labels = tuple(
-        dict.fromkeys(
-            [
-                *_EQUATION_LABEL_RE.findall(normalized),
-                *_LATEX_TAG_RE.findall(normalized),
-            ]
-        )
-    )
+    latex_tags = _LATEX_TAG_RE.findall(normalized)
+    metadata_labels = _FORMULA_NUMBER_METADATA_RE.findall(normalized)
+    # An annotated formula contains ordinary equation references in its source
+    # context. Those references are not identifiers of the formula body. A
+    # LaTeX tag (or our explicit metadata field) is authoritative here.
+    if _DISPLAY_MATH_RE.search(normalized):
+        labels = tuple(dict.fromkeys([*latex_tags, *metadata_labels]))
+    else:
+        labels = tuple(dict.fromkeys(_EQUATION_LABEL_RE.findall(normalized)))
     if _DISPLAY_MATH_RE.search(normalized):
         return FormulaNormalization(normalized, False, labels, False)
 
@@ -179,7 +184,13 @@ def standardize_formula_markdown(text: str) -> FormulaNormalization:
     )
     chinese_count = len(re.findall(r"[\u3400-\u9fff]", normalized))
     chinese_ratio = chinese_count / max(len(normalized), 1)
+    begins_with_equation_label = bool(
+        re.match(r"^\s*[（(]\s*\d+(?:\.\d+)+\s*[）)]", normalized)
+    )
     needs_visual_review = bool(
-        labels and math_signal_count >= 3 and chinese_ratio < 0.2
+        labels
+        and begins_with_equation_label
+        and math_signal_count >= 3
+        and chinese_ratio < 0.2
     )
     return FormulaNormalization(normalized, False, labels, needs_visual_review)

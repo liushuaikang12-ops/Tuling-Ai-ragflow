@@ -99,7 +99,7 @@ RAG_BACKEND=legacy   → 需要同时设置 ENABLE_LEGACY_RAG=true
 | 内容类型 | 处理方式 |
 |---|---|
 | 正文与扫描文本 | 页面渲染、文字检测、OCR 和阅读顺序恢复 |
-| 公式 | 检测公式区域；解析后将可信转写统一为 Markdown-LaTeX，重新分词和向量化；不确定内容进入视觉复核清单 |
+| 公式 | 检测带编号的公式区域；优先保留可信转写，结构不完整时用已配置的 GLM Vision 读取原始裁剪图并转为 Markdown-LaTeX |
 | 图片 | 提取图片区域，使用视觉模型生成可检索语义描述 |
 | 表格 | 检测表格区域和单元格关系，组织为结构化文本进入分块 |
 | 标题与段落 | 根据版面和语义边界形成 Chunk，而不是只按固定字符盲切 |
@@ -110,17 +110,19 @@ Chunk 中。`rag_api_service` 在 RAGFlow 解析完成后自动执行公式审�
 
 1. 将 SymbolMT 私有字符还原为标准 Unicode 数学符号。
 2. 只对结构可确认的转写移除重复 OCR 副本，补齐尾部缺失的花括号。
-3. 统一写成 `\[\begin{aligned}...\end{aligned}\tag{1.1}\]` 格式。
-4. 将公式编号和相邻说明生成 `questions/important_keywords` 语义桥。
-5. 通过 RAGFlow Chunk PATCH API 写回并重新分词、向量化和索引。
+3. 对只有扁平 OCR 的编号公式，读取 RAGFlow 保存的原始公式裁剪图，调用租户默认视觉模型逐符号转写。
+4. 统一写成 `\[...\tag{1.1}\]`，并在 Chunk 顶部保存原文名称、编号、文档、PDF 页码和邻近上下文。
+5. 将公式名称、编号和相邻说明生成 `questions/important_keywords` 语义桥。
+6. 通过 RAGFlow Chunk PATCH API 写回并重新分词、向量化和索引。
 
-无法可靠恢复结构的扁平 OCR 公式不会由正则猜测，而是列入
-`needs_visual_review`。可通过
+无法可靠恢复结构的扁平 OCR 公式不会由正则猜测。自托管模式启用
+`deployment/docker-compose.ragflow-formula.yml` 后，它们会进入串行视觉转写；
+模型限流或转写校验失败的条目才保留在 `needs_visual_review`。可通过
 `POST /api/docs/documents/{doc_id}/normalize-formulas`（请求体
-`{"dry_run": true}` 可仅审计）查看结果。前端使用 KaTeX 渲染标准公式；
-公式类问题仍会保留编号定向召回作为跨 Chunk 保护。如果 RAGFlow 解析日志中
-出现视觉模型 `429`，需处理模型配额或限流后重新解析，才能修复视觉阶段已
-丢失的公式结构。
+`{"dry_run": true}` 可仅审计）查看结果。聊天答案、来源和文档 Chunk 弹窗都
+使用 KaTeX 渲染；公式类问题按 `\tag{编号}` 定向召回公式本体，并要求生成模型
+先给出名称、编号和完整公式，再进行解释。部署方式见
+[deployment/README.md](deployment/README.md)。
 
 ### 3. MCP 变为纯查询代理
 

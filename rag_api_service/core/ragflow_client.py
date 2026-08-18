@@ -139,6 +139,14 @@ class RAGFlowClient:
             json=body,
         )
 
+    async def recognize_formula(self, image_id: str, prompt: str) -> dict[str, Any]:
+        data = await self._request(
+            "POST",
+            f"/api/v1/datasets/{self.dataset_id}/formula-vision",
+            json={"image_id": image_id, "prompt": prompt},
+        )
+        return data if isinstance(data, dict) else {"text": str(data or "")}
+
     async def delete_documents(self, document_ids: list[str]) -> None:
         await self._request(
             "DELETE",

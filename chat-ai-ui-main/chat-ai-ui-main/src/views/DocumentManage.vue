@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, onBeforeUnmount, computed } from 'vue';
 import axios from 'axios';
+import { marked } from 'marked';
+import { renderMarkdownWithMath } from '../utils/markdownMath';
 
 const VITE_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
@@ -26,6 +28,9 @@ interface ChunkItem {
     file_type: string;
     content_type: string;
     chunk_size: number;
+    formula_format?: 'latex' | 'needs_vision' | 'none';
+    formula_name?: string;
+    equation_numbers?: string[];
   };
 }
 
@@ -94,6 +99,10 @@ function getFileIcon(fileType: string): string {
   if (fileType.includes('doc')) return '📘';
   if (fileType.includes('xls') || fileType.includes('csv')) return '📊';
   return '📄';
+}
+
+function renderChunkContent(text: string): string {
+  return renderMarkdownWithMath(text, value => String(marked.parse(value)));
 }
 
 function normalizedStatus(doc: DocInfo): string {
@@ -451,10 +460,15 @@ onBeforeUnmount(() => {
                       <span class="doc-manage__chunk-index">#{{ (chunksPage - 1) * chunksPageSize + idx + 1 }}</span>
                       <span class="doc-manage__chunk-id">{{ chunk.chunk_id }}</span>
                     </div>
-                    <div class="doc-manage__chunk-text">{{ chunk.text }}</div>
+                    <div class="doc-manage__chunk-text" v-html="renderChunkContent(chunk.text)"></div>
                     <div class="doc-manage__chunk-meta">
                       <span>类型: {{ chunk.metadata.content_type || 'text' }}</span>
                       <span>长度: {{ chunk.metadata.chunk_size || chunk.text.length }} 字符</span>
+                      <span v-if="chunk.metadata.formula_format === 'latex'">公式格式: LaTeX</span>
+                      <span v-if="chunk.metadata.formula_name">名称: {{ chunk.metadata.formula_name }}</span>
+                      <span v-if="chunk.metadata.equation_numbers?.length">
+                        编号: {{ chunk.metadata.equation_numbers.map(item => `(${item})`).join('、') }}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1031,8 +1045,15 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 
+.doc-manage__chunk-text :deep(.katex-display) {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: var(--space-2) 0;
+}
+
 .doc-manage__chunk-meta {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-4);
   font-size: var(--text-xs);
   color: var(--color-text-tertiary);

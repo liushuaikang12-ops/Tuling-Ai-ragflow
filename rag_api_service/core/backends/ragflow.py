@@ -207,6 +207,321 @@ class RAGFlowBackend:
                             questions.append(sentence.rstrip("？?") + "是什么？")
         return list(dict.fromkeys(questions))[:5]
 
+    @staticmethod
+    def _formula_context(
+        label: str, target_chunk: dict[str, Any], chunks: list[dict[str, Any]]
+    ) -> str:
+        contexts: list[str] = []
+        label_re = re.compile(
+            rf"(?:[（(]\s*{re.escape(label)}\s*[）)]|"
+            rf"\\tag\{{\s*{re.escape(label)}\s*\}})"
+        )
+        for chunk in chunks:
+            text = normalize_pdf_symbol_text(str(chunk.get("content") or ""))
+            for match in label_re.finditer(text):
+                if str(chunk.get("id") or "") == str(target_chunk.get("id") or ""):
+                    continue
+                contexts.append(
+                    re.sub(
+                        r"\s+",
+                        " ",
+                        text[max(0, match.start() - 420) : match.end() + 160],
+                    ).strip()
+                )
+
+        target_positions = target_chunk.get("positions") or []
+        try:
+            target_page = int(target_positions[0][0])
+            target_top = float(target_positions[0][3])
+        except (IndexError, TypeError, ValueError):
+            target_page = -1
+            target_top = 0
+        page_neighbors: list[tuple[float, str]] = []
+        for chunk in chunks:
+            if str(chunk.get("id") or "") == str(target_chunk.get("id") or ""):
+                continue
+            text = normalize_pdf_symbol_text(str(chunk.get("content") or ""))
+            if len(re.findall(r"[\u3400-\u9fff]", text)) < 8:
+                continue
+            matching_positions = [
+                position
+                for position in (chunk.get("positions") or [])
+                if position and int(position[0]) == target_page
+            ]
+            if not matching_positions:
+                continue
+            distance = min(abs(float(position[3]) - target_top) for position in matching_positions)
+            page_neighbors.append((distance, re.sub(r"\s+", " ", text).strip()))
+        for _, text in sorted(page_neighbors, key=lambda item: item[0])[:3]:
+            contexts.append(text[:700])
+
+        return "\n".join(dict.fromkeys(item for item in contexts if item))[:1800]
+
+    @staticmethod
+    def _formula_page(chunk: dict[str, Any]) -> int | None:
+        positions = chunk.get("positions") or []
+        try:
+            # RAGFlow stores a zero-based PDF page index as the first value.
+            return int(positions[0][0]) + 1
+        except (IndexError, TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_formula_vision(text: str, expected_label: str) -> dict[str, Any]:
+        candidate = text.strip().strip("`").strip()
+        if candidate.lower().startswith("json"):
+            candidate = candidate[4:].strip()
+        starts = [index for index in (candidate.find("{"), candidate.find("[")) if index >= 0]
+        if not starts:
+            raise ValueError("视觉模型没有返回 JSON 公式结果")
+        start = min(starts)
+        closing = "]" if candidate[start] == "[" else "}"
+        end = candidate.rfind(closing)
+        if end < start:
+            raise ValueError("视觉模型返回的 JSON 没有闭合")
+        raw_json = candidate[start : end + 1]
+
+        def encode_latex(match: re.Match[str]) -> str:
+            latex_value = match.group("latex")
+            latex_value = latex_value.replace("\\\\", "\\").replace('\\"', '"')
+            latex_value = latex_value.replace("<BS>", "\\")
+            return match.group("prefix") + json.dumps(latex_value, ensure_ascii=False)
+
+        # Normalize both JSON strings and the Python-style r"..." strings that
+        # some vision models emit for LaTeX. Re-encoding the value prevents
+        # \beta / \tau / \frac from becoming JSON control escapes.
+        repaired_json = re.sub(
+            r'(?P<prefix>"latex"\s*:\s*)r?"(?P<latex>(?:\\.|[^"\\])*)"',
+            encode_latex,
+            raw_json,
+        )
+        payload: Any = json.loads(repaired_json)
+        if isinstance(payload, list):
+            payload = next(
+                (
+                    item
+                    for item in payload
+                    if isinstance(item, dict)
+                    and str(item.get("equation_number") or "").strip("()（） ")
+                    == expected_label
+                ),
+                None,
+            )
+            if payload is None:
+                raise ValueError(f"视觉结果中没有公式 ({expected_label})")
+        if not isinstance(payload, dict):
+            raise ValueError("视觉模型返回的公式结果不是 JSON 对象")
+        latex = str(payload.get("latex") or "")
+        latex = latex.strip()
+        latex = re.sub(r"^\\\[|\\\]$", "", latex).strip()
+        latex = re.sub(r"^\$\$|\$\$$", "", latex).strip()
+        latex = re.sub(r"\\tag\{[^{}]+\}", "", latex).strip()
+        # A model may use "\\D" as a visual line separator before an
+        # uppercase variable. Unknown one-letter commands do not render in
+        # KaTeX, so restore them to ordinary variables without changing known
+        # commands such as \Lambda.
+        latex = re.sub(r"\\([A-Z])(?=\s|_|=)", r"\1", latex)
+        relation_re = re.compile(
+            r"=|[<>≤≥]|\\(?:sim|approx|propto|equiv|leq?|geq?|neq)\b"
+        )
+        if not latex or not relation_re.search(latex):
+            raise ValueError("视觉模型返回的 LaTeX 不包含完整数学关系")
+        label = str(payload.get("equation_number") or expected_label).strip("()（） ")
+        if label != expected_label:
+            raise ValueError(
+                f"视觉模型返回编号 {label}，与 Chunk 编号 {expected_label} 不一致"
+            )
+        return {
+            "latex": latex,
+            "equation_number": label,
+            "formula_name": str(payload.get("formula_name") or "").strip(),
+            "description": str(payload.get("description") or "").strip(),
+            "confidence": float(payload.get("confidence") or 0),
+        }
+
+    @staticmethod
+    def _formula_name_from_context(label: str, context: str) -> str:
+        compact = re.sub(r"\s+", "", context)
+        ito_match = re.search(
+            r"((?:[（(]?\d+\+\d+[）)]?维)?[A-Za-z]+方程的N-孤子解)"
+            r"的方程表达式如下",
+            compact,
+            re.IGNORECASE,
+        )
+        if ito_match:
+            subject = ito_match.group(1)
+            if label == "1.1":
+                return f"{subject}的方程表达式"
+            if "其中色散关系如下" in compact:
+                return f"{subject}的色散关系"
+
+        direct_solution = re.search(
+            r"(方程[（(]?\d+[）)]?的N-孤子解)", compact, re.IGNORECASE
+        )
+        if direct_solution:
+            return direct_solution.group(1)
+        if label == "1.3" and ("D算子" in compact or "双线性算子" in compact):
+            return "Hirota D 算子定义"
+        patterns = [
+            r"(呼吸子解|孤子解|Lump解|态转换解)",
+        ]
+        for pattern in patterns:
+            found = re.search(pattern, compact, re.IGNORECASE)
+            if found:
+                name = found.group(1)
+                return name
+        return f"原文公式（式 {label}）"
+
+    @staticmethod
+    def _formula_context_summary(context: str) -> str:
+        normalized = re.sub(r"\s+", " ", context).strip()
+        if not normalized:
+            return "原文未提供可独立提取的公式名称说明"
+        sentences = [
+            item.strip()
+            for item in re.split(r"[。\n]", normalized)
+            if item.strip()
+        ]
+        relevant = [
+            sentence
+            for sentence in sentences
+            if any(
+                marker in sentence
+                for marker in ("方程", "公式", "表达式", "色散关系", "算子", "解")
+            )
+        ]
+        return (relevant or sentences)[0][:320]
+
+    def _annotate_standard_formula(
+        self,
+        chunk: dict[str, Any],
+        content: str,
+        label: str,
+        chunks: list[dict[str, Any]],
+    ) -> tuple[str, str]:
+        if content.lstrip().startswith("# 原文公式："):
+            name_match = re.search(r"^# 原文公式：(.+)$", content, re.MULTILINE)
+            name = (
+                name_match.group(1).strip()
+                if name_match
+                else f"原文公式（式 {label}）"
+            )
+            return content, name
+        display_match = re.search(r"\\\[([\s\S]*?)\\\]", content)
+        if not display_match:
+            return content, f"原文公式（式 {label}）"
+        latex = re.sub(
+            rf"\\tag\{{\s*{re.escape(label)}\s*\}}",
+            "",
+            display_match.group(1),
+        ).strip()
+        context = self._formula_context(label, chunk, chunks)
+        name = self._formula_name_from_context(label, context)
+        annotated = self._formula_chunk_content(
+            latex=latex,
+            label=label,
+            name=name,
+            description=self._formula_context_summary(context),
+            document_name=str(chunk.get("docnm_kwd") or "未知文档"),
+            page=self._formula_page(chunk),
+        )
+        return annotated, name
+
+    def _formula_vision_prompt(
+        self,
+        *,
+        label: str,
+        ocr_text: str,
+        context: str,
+        document_name: str,
+    ) -> str:
+        return (
+            "你是数学论文公式转写器。请逐符号读取图片中的公式，输出严格 JSON，"
+            "不要输出 Markdown 代码围栏。字段必须为：equation_number、latex、"
+            "confidence。latex 中每个反斜杠必须写成 <BS>，例如 <BS>alpha；"
+            "latex 只放公式主体，不放 $$、"
+            "\\[\\] 或 \\tag；必须保留下标、上标、分式、求和范围、偏导和大括号。"
+            "不要解释或猜测公式名称，图片内容是唯一的公式转写依据。"
+            f"\n预期编号：({label})"
+            f"\n文档：{document_name}"
+            f"\n现有 OCR（仅供校对，图片优先）：{ocr_text[:700]}"
+            f"\n原文邻近上下文：{context or '未找到，名称使用“原文公式”'}"
+        )
+
+    @staticmethod
+    def _formula_chunk_content(
+        *,
+        latex: str,
+        label: str,
+        name: str,
+        description: str,
+        document_name: str,
+        page: int | None,
+    ) -> str:
+        formula_name = name or f"原文公式（式 {label}）"
+        metadata = [
+            f"# 原文公式：{formula_name}",
+            f"- 公式编号：({label})",
+            f"- 来源文档：{document_name}",
+        ]
+        if page is not None:
+            metadata.append(f"- 原文 PDF 页码：{page}")
+        if description:
+            metadata.append(f"- 原文上下文：{description}")
+        metadata.extend(
+            [
+                "",
+                "\\[",
+                latex,
+                f"\\tag{{{label}}}",
+                "\\]",
+            ]
+        )
+        return "\n".join(metadata)
+
+    async def _recognize_formula_chunk(
+        self,
+        chunk: dict[str, Any],
+        label: str,
+        chunks: list[dict[str, Any]],
+    ) -> tuple[str, dict[str, Any], list[str], list[str]]:
+        image_id = str(chunk.get("image_id") or "")
+        if not image_id:
+            raise ValueError("公式 Chunk 没有页面裁剪图")
+        document_name = str(chunk.get("docnm_kwd") or "未知文档")
+        context = self._formula_context(label, chunk, chunks)
+        prompt = self._formula_vision_prompt(
+            label=label,
+            ocr_text=normalize_pdf_symbol_text(str(chunk.get("content") or "")),
+            context=context,
+            document_name=document_name,
+        )
+        response = await self.client.recognize_formula(image_id, prompt)
+        parsed = self._parse_formula_vision(str(response.get("text") or ""), label)
+        name = self._formula_name_from_context(label, context)
+        description = self._formula_context_summary(context)
+        content = self._formula_chunk_content(
+            latex=parsed["latex"],
+            label=label,
+            name=name,
+            description=description,
+            document_name=document_name,
+            page=self._formula_page(chunk),
+        )
+        questions = list(
+            dict.fromkeys(
+                [
+                    f"{name}的具体公式是什么？",
+                    f"方程({label})的完整 LaTeX 公式是什么？",
+                    *self._formula_questions((label,), chunks),
+                ]
+            )
+        )[:6]
+        keywords = list(
+            dict.fromkeys(["LaTeX", "数学公式", name, f"公式({label})", f"方程({label})"])
+        )
+        return content, parsed, questions, keywords
+
     async def normalize_document_formulas(
         self, doc_id: str, dry_run: bool = False
     ) -> dict[str, Any]:
@@ -228,14 +543,36 @@ class RAGFlowBackend:
                     standard_chunks.append((chunk, result))
 
         metadata_refreshed = 0
+        vision_standardized: list[str] = []
+        vision_failed: list[dict[str, str]] = []
         if not dry_run:
             for chunk, result in [*standardized, *standard_chunks]:
                 chunk_id = str(chunk.get("id") or "")
                 labels = result.equation_labels
-                questions = self._formula_questions(labels, chunks)
+                content = result.content
+                if content.lstrip().startswith("# 原文公式：") and not result.changed:
+                    # This chunk already passed formula annotation and its
+                    # embedding was rebuilt. Avoid re-embedding it on every
+                    # audit/list request.
+                    continue
+                names: list[str] = []
+                if labels:
+                    content, name = self._annotate_standard_formula(
+                        chunk, content, labels[0], chunks
+                    )
+                    names.append(name)
+                questions = list(
+                    dict.fromkeys(
+                        [
+                            *[f"{name}的具体公式是什么？" for name in names],
+                            *self._formula_questions(labels, chunks),
+                        ]
+                    )
+                )[:6]
                 keywords = ["LaTeX"]
                 for label in labels:
                     keywords.extend([f"公式({label})", f"方程({label})"])
+                keywords.extend(names)
                 keywords = list(dict.fromkeys(keywords))
                 old_questions = [str(item) for item in chunk.get("questions") or []]
                 old_keywords = [
@@ -243,6 +580,7 @@ class RAGFlowBackend:
                 ]
                 if (
                     not result.changed
+                    and str(chunk.get("content") or "") == content
                     and old_questions == questions
                     and old_keywords == keywords
                 ):
@@ -250,18 +588,69 @@ class RAGFlowBackend:
                 await self.client.update_chunk(
                     doc_id,
                     chunk_id,
-                    content=result.content,
+                    content=content,
                     questions=questions,
                     important_keywords=keywords,
                 )
                 if not result.changed:
                     metadata_refreshed += 1
 
+            if Settings.RAGFLOW_FORMULA_VISION_ENABLED:
+                chunks_by_id = {
+                    str(item.get("id") or ""): item for item in chunks
+                }
+                for chunk_id in visual_review:
+                    chunk = chunks_by_id[chunk_id]
+                    result = standardize_formula_markdown(
+                        str(chunk.get("content") or "")
+                    )
+                    if not result.equation_labels:
+                        continue
+                    label = result.equation_labels[0]
+                    try:
+                        content, parsed, questions, keywords = (
+                            await self._recognize_formula_chunk(
+                                chunk, label, chunks
+                            )
+                        )
+                        await self.client.update_chunk(
+                            doc_id,
+                            chunk_id,
+                            content=content,
+                            questions=questions,
+                            important_keywords=keywords,
+                        )
+                        vision_standardized.append(chunk_id)
+                        logger.info(
+                            "公式 (%s) 已由视觉模型转为 LaTeX，confidence=%s",
+                            label,
+                            parsed["confidence"],
+                        )
+                    except Exception as exc:
+                        logger.warning("公式 Chunk %s 视觉转写失败: %s", chunk_id, exc)
+                        vision_failed.append(
+                            {"chunk_id": chunk_id, "error": str(exc)}
+                        )
+                    await asyncio.sleep(
+                        max(0, Settings.RAGFLOW_FORMULA_VISION_DELAY_SECONDS)
+                    )
+            else:
+                vision_failed = [
+                    {"chunk_id": chunk_id, "error": "公式视觉转写未启用"}
+                    for chunk_id in visual_review
+                ]
+
+        pending_visual_ids = (
+            visual_review
+            if dry_run
+            else [item["chunk_id"] for item in vision_failed]
+        )
         report: dict[str, Any] = {
             "status": "preview" if dry_run else "success",
             "message": (
                 f"扫描 {len(chunks)} 个 Chunk，标准化 {len(standardized)} 个；"
-                f"{len(visual_review)} 个需要视觉模型复核"
+                f"视觉转写 {len(vision_standardized)} 个；"
+                f"{len(vision_failed) if not dry_run else len(visual_review)} 个待处理"
             ),
             "document_id": doc_id,
             "dry_run": dry_run,
@@ -269,11 +658,15 @@ class RAGFlowBackend:
             "standardized": len(standardized),
             "metadata_refreshed": metadata_refreshed,
             "already_standard": already_standard,
-            "needs_visual_review": len(visual_review),
+            "needs_visual_review": len(pending_visual_ids),
+            "vision_enabled": Settings.RAGFLOW_FORMULA_VISION_ENABLED,
+            "vision_standardized": len(vision_standardized),
+            "vision_standardized_chunk_ids": vision_standardized,
+            "vision_failed": vision_failed,
             "standardized_chunk_ids": [
                 str(item[0].get("id") or "") for item in standardized
             ],
-            "visual_review_chunk_ids": visual_review,
+            "visual_review_chunk_ids": pending_visual_ids,
         }
         if not dry_run:
             self._formula_audited.add(doc_id)
@@ -291,6 +684,10 @@ class RAGFlowBackend:
             if not isinstance(chunk, dict):
                 continue
             content = normalize_pdf_symbol_text(str(chunk.get("content") or ""))
+            formula_result = standardize_formula_markdown(content)
+            formula_name_match = re.search(
+                r"^# 原文公式：(.+)$", content, re.MULTILINE
+            )
             chunks.append(
                 {
                     "chunk_id": str(chunk.get("id") or ""),
@@ -303,6 +700,21 @@ class RAGFlowBackend:
                         "image_id": chunk.get("image_id") or "",
                         "positions": chunk.get("positions") or [],
                         "keywords": chunk.get("important_keywords") or [],
+                        "formula_format": (
+                            "latex"
+                            if "\\[" in content or "$$" in content
+                            else (
+                                "needs_vision"
+                                if formula_result.needs_visual_review
+                                else "none"
+                            )
+                        ),
+                        "formula_name": (
+                            formula_name_match.group(1).strip()
+                            if formula_name_match
+                            else ""
+                        ),
+                        "equation_numbers": list(formula_result.equation_labels),
                     },
                 }
             )
@@ -379,10 +791,16 @@ class RAGFlowBackend:
     @staticmethod
     def _formula_score(chunk: dict[str, Any], references: list[str]) -> int:
         content = normalize_pdf_symbol_text(str(chunk.get("content") or ""))
+        tag_hits = sum(
+            bool(re.search(rf"\\tag\{{\s*{re.escape(reference)}\s*\}}", content))
+            for reference in references
+        )
         reference_hits = sum(content.count(f"({reference})") for reference in references)
         latex_hits = len(_LATEX_COMMAND_RE.findall(content))
         operator_hits = len(re.findall(r"[=∑∂]|_\{|\^\{", content))
-        return reference_hits * 8 + latex_hits * 3 + min(operator_hits, 12)
+        # An authoritative LaTeX tag must outrank chunks that merely mention
+        # the same equation number in explanatory source context.
+        return tag_hits * 1000 + reference_hits * 8 + latex_hits * 3 + min(operator_hits, 12)
 
     async def _expand_formula_chunks(
         self,
@@ -475,7 +893,9 @@ class RAGFlowBackend:
             "你是企业知识库问答助手。请仅依据给定资料回答问题，不要编造。"
             "如果资料不足，请明确说明。回答中可使用 [1]、[2] 标注依据。"
             "当用户询问公式或表达式时，若资料中存在 LaTeX、等号或数学符号，"
-            "请逐项抄录并用 LaTeX 排版；不要仅因原文换行或格式不整齐就判断公式缺失，"
+            "必须先给出原文公式名称、编号和完整 LaTeX 公式，再解释各符号；"
+            "不得只复述‘表达式如下’或只返回公式说明。带有‘# 原文公式’标记的"
+            "Chunk 是公式本体，应优先逐项抄录；不要仅因原文换行或格式不整齐就判断公式缺失，"
             "无法确认的单个符号应标注为 OCR 不确定。\n\n"
             f"问题：{query}\n\n资料：\n" + "\n\n".join(context_parts)
         )

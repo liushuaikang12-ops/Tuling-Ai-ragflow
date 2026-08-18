@@ -62,6 +62,13 @@ class Settings:
     }
     RAGFLOW_BASE_URL: str = os.getenv("RAGFLOW_BASE_URL", "http://127.0.0.1:9380").rstrip("/")
     RAGFLOW_API_KEY: Optional[str] = os.getenv("RAGFLOW_API_KEY")
+    RAGFLOW_FORMULA_VISION_ENABLED: bool = (
+        os.getenv("RAGFLOW_FORMULA_VISION_ENABLED", "false").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
+    RAGFLOW_FORMULA_VISION_DELAY_SECONDS: float = float(
+        os.getenv("RAGFLOW_FORMULA_VISION_DELAY_SECONDS", "1.5")
+    )
     RAGFLOW_DATASET_ID: Optional[str] = os.getenv("RAGFLOW_DATASET_ID")
     RAGFLOW_TIMEOUT_SECONDS: float = float(os.getenv("RAGFLOW_TIMEOUT_SECONDS", "120"))
     RAGFLOW_SIMILARITY_THRESHOLD: float = float(

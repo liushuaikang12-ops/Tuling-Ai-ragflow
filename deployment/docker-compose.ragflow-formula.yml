@@ -1,0 +1,8 @@
+services:
+  ragflow-cpu:
+    volumes:
+      - ${FORMULA_VISION_API_FILE:?Set FORMULA_VISION_API_FILE to the absolute patch path}:/ragflow/api/apps/restful_apis/formula_vision_api.py:ro
+
+  ragflow-gpu:
+    volumes:
+      - ${FORMULA_VISION_API_FILE:?Set FORMULA_VISION_API_FILE to the absolute patch path}:/ragflow/api/apps/restful_apis/formula_vision_api.py:ro
