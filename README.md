@@ -99,18 +99,28 @@ RAG_BACKEND=legacy   → 需要同时设置 ENABLE_LEGACY_RAG=true
 | 内容类型 | 处理方式 |
 |---|---|
 | 正文与扫描文本 | 页面渲染、文字检测、OCR 和阅读顺序恢复 |
-| 公式 | 检测公式区域并尽量保留表达；扫描质量会影响符号和上下标准确率 |
+| 公式 | 检测公式区域；解析后将可信转写统一为 Markdown-LaTeX，重新分词和向量化；不确定内容进入视觉复核清单 |
 | 图片 | 提取图片区域，使用视觉模型生成可检索语义描述 |
 | 表格 | 检测表格区域和单元格关系，组织为结构化文本进入分块 |
 | 标题与段落 | 根据版面和语义边界形成 Chunk，而不是只按固定字符盲切 |
 
 部分由 Word/MathType 生成的论文 PDF 会把 SymbolMT 字体暴露为 `U+F0xx`
-私有区字符。`rag_api_service` 会在展示 Chunk、拼接来源和生成回答前，将
-这些编码还原为标准的希腊字母与数学符号；前端使用 KaTeX 渲染模型返回的
-LaTeX。公式类问题还会从高相关 Chunk 中识别“方程 (1.1)”等编号，执行一次
-编号定向召回，避免“表达式如下”和公式本体被分到不同 Chunk 后只召回前者。
-这个兼容层不能凭空恢复解析阶段已经丢失的公式结构：如果 RAGFlow
-解析日志中出现视觉模型 `429`，应先处理模型配额或限流，再重新解析原文档。
+私有区字符，DeepDoc 也可能把“可用 LaTeX + 损坏的 OCR 副本”拼在同一个
+Chunk 中。`rag_api_service` 在 RAGFlow 解析完成后自动执行公式审计：
+
+1. 将 SymbolMT 私有字符还原为标准 Unicode 数学符号。
+2. 只对结构可确认的转写移除重复 OCR 副本，补齐尾部缺失的花括号。
+3. 统一写成 `\[\begin{aligned}...\end{aligned}\tag{1.1}\]` 格式。
+4. 将公式编号和相邻说明生成 `questions/important_keywords` 语义桥。
+5. 通过 RAGFlow Chunk PATCH API 写回并重新分词、向量化和索引。
+
+无法可靠恢复结构的扁平 OCR 公式不会由正则猜测，而是列入
+`needs_visual_review`。可通过
+`POST /api/docs/documents/{doc_id}/normalize-formulas`（请求体
+`{"dry_run": true}` 可仅审计）查看结果。前端使用 KaTeX 渲染标准公式；
+公式类问题仍会保留编号定向召回作为跨 Chunk 保护。如果 RAGFlow 解析日志中
+出现视觉模型 `429`，需处理模型配额或限流后重新解析，才能修复视觉阶段已
+丢失的公式结构。
 
 ### 3. MCP 变为纯查询代理
 

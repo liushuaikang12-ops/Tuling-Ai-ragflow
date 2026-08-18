@@ -18,6 +18,10 @@ class ChunkConfigRequest(BaseModel):
     chunk_overlap: int
 
 
+class FormulaNormalizeRequest(BaseModel):
+    dry_run: bool = False
+
+
 logger = setup_logger(__name__)
 
 router = APIRouter()
@@ -82,6 +86,19 @@ async def delete_document(doc_id: str):
     init_rag_service()
     try:
         return await svc.delete_document(doc_id)
+    except Exception as e:
+        logger.error(str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/documents/{doc_id:path}/normalize-formulas")
+async def normalize_document_formulas(
+    doc_id: str,
+    req: FormulaNormalizeRequest,
+):
+    init_rag_service()
+    try:
+        return await svc.normalize_document_formulas(doc_id, dry_run=req.dry_run)
     except Exception as e:
         logger.error(str(e))
         raise HTTPException(status_code=500, detail=str(e))

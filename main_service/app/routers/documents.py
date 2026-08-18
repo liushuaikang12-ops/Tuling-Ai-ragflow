@@ -5,6 +5,7 @@
 - GET  /api/docs/list:   返回已入库文档列表（含元数据）
 - GET  /api/docs/chunks/{doc_id}: 获取指定文档的分块（分页）
 - DELETE /api/docs/documents/{doc_id}: 删除单个文档
+- POST /api/docs/documents/{doc_id}/normalize-formulas: 标准化并重建公式 Chunk 索引
 - GET  /api/docs/config/chunk: 获取分块配置
 - PUT  /api/docs/config/chunk: 更新分块配置
 - POST /api/docs/reset:  系统级重置（会清空索引等，需谨慎）
@@ -89,6 +90,20 @@ async def delete_document(
             status=str(result.get("status", "error")),
             message=str(result.get("message", "")),
         )
+    except Exception as e:
+        logger.error(str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/documents/{doc_id:path}/normalize-formulas")
+async def normalize_document_formulas(
+    doc_id: str,
+    dry_run: bool = Query(False),
+    current_user: User = Depends(get_current_active_user),
+    svc: RAGApiService = Depends(get_rag_api_service),
+):
+    try:
+        return await svc.normalize_document_formulas(doc_id, dry_run=dry_run)
     except Exception as e:
         logger.error(str(e))
         raise HTTPException(status_code=500, detail=str(e))

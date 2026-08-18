@@ -307,7 +307,7 @@ const ragflowFlow: FlowScenario = {
   title: 'RAGFlow 文档解析：从页面识别到可检索 Chunk',
   summary: '当前默认链路。页面会实时显示 RAGFlow 的 status、progress、progress_msg 和 chunk_count。',
   task: '示例：上传一份同时包含正文、图片、公式和表格的 PDF。',
-  route: '上传 → OCR/版面 → 公式/图片/表格 → Chunk → Embedding → Elasticsearch → 可检索',
+  route: '上传 → OCR/版面 → 公式/图片/表格 → Chunk → LaTeX 标准化 → Embedding → Elasticsearch',
   nodes: [
     {
       name: '上传与创建任务', owner: 'rag_api_service → RAGFlow Dataset',
@@ -344,6 +344,12 @@ const ragflowFlow: FlowScenario = {
       action: '沿标题、段落和内容区域边界组合 Chunk，并保留文件名与页面位置。',
       input: '正文 + 公式 + 图片描述 + 表格文本', output: 'Chunk[] + metadata',
       result: '页面显示实时 chunk_count；解析完成后可以逐块查看。',
+    },
+    {
+      name: '公式标准化与语义桥', owner: 'rag_api_service',
+      action: '审计公式 Chunk；可信转写统一为 Markdown-LaTeX，移除重复 OCR，并把公式编号和相邻说明写入检索问题。',
+      input: 'RAGFlow Chunk + 页面位置', output: '\\[...\\] + tag + questions/keywords',
+      result: '写回 RAGFlow 后重新分词和向量化；结构不确定的公式进入视觉复核清单，不猜测补写。',
     },
     {
       name: '向量化与索引', owner: 'Qwen3 Embedding / TEI / Elasticsearch',

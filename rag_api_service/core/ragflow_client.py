@@ -118,6 +118,27 @@ class RAGFlowClient:
             return {"chunks": data, "total": len(data)}
         return data if isinstance(data, dict) else {"chunks": [], "total": 0}
 
+    async def update_chunk(
+        self,
+        document_id: str,
+        chunk_id: str,
+        *,
+        content: str,
+        questions: list[str] | None = None,
+        important_keywords: list[str] | None = None,
+    ) -> None:
+        body: dict[str, Any] = {"content": content}
+        if questions:
+            body["questions"] = questions
+        if important_keywords:
+            body["important_keywords"] = important_keywords
+        await self._request(
+            "PATCH",
+            f"/api/v1/datasets/{self.dataset_id}/documents/"
+            f"{document_id}/chunks/{chunk_id}",
+            json=body,
+        )
+
     async def delete_documents(self, document_ids: list[str]) -> None:
         await self._request(
             "DELETE",

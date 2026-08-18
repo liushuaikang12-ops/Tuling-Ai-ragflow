@@ -50,6 +50,17 @@ class RAGApiService:
             resp.raise_for_status()
             return resp.json()
 
+    async def normalize_document_formulas(
+        self, doc_id: str, dry_run: bool = False
+    ) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=300.0, trust_env=False) as client:
+            resp = await client.post(
+                f"{self.base_url}/documents/{doc_id}/normalize-formulas",
+                json={"dry_run": dry_run},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     async def get_chunk_config(self) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.get(f"{self.base_url}/config/chunk")

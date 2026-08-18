@@ -96,6 +96,19 @@ class LegacyRAGBackend:
             "chunk_overlap": chunk_overlap,
         }
 
+    async def normalize_document_formulas(
+        self, doc_id: str, dry_run: bool = False
+    ) -> dict[str, Any]:
+        return {
+            "status": "unsupported",
+            "message": "Legacy 后端不支持 RAGFlow Chunk 写回",
+            "document_id": doc_id,
+            "dry_run": dry_run,
+            "scanned": 0,
+            "standardized": 0,
+            "needs_visual_review": 0,
+        }
+
     async def query(self, query: str) -> dict[str, Any]:
         answer, sources = await self.app.query_documents(
             query=query,

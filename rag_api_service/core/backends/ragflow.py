@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any
@@ -8,7 +9,10 @@ import httpx
 
 from config.settings import Settings
 from core.ragflow_client import RAGFlowClient
-from core.text_normalization import normalize_pdf_symbol_text
+from core.text_normalization import (
+    normalize_pdf_symbol_text,
+    standardize_formula_markdown,
+)
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -43,6 +47,9 @@ class RAGFlowBackend:
             dataset_id=Settings.RAGFLOW_DATASET_ID or "",
             timeout=Settings.RAGFLOW_TIMEOUT_SECONDS,
         )
+        self._formula_jobs: dict[str, asyncio.Task[None]] = {}
+        self._formula_audited: set[str] = set()
+        self._formula_reports: dict[str, dict[str, Any]] = {}
 
     async def upload_files(
         self,
@@ -63,6 +70,8 @@ class RAGFlowBackend:
         if not document_ids:
             raise RuntimeError("RAGFlow 接受了上传请求，但没有返回文档 ID")
         await self.client.start_parsing(document_ids)
+        for document_id in document_ids:
+            self._schedule_formula_job(document_id)
         return {
             "status": "success",
             "message": f"已上传 {len(documents)} 个文档，RAGFlow 正在异步解析",
@@ -101,10 +110,176 @@ class RAGFlowBackend:
             if len(batch) < page_size or len(documents) >= total:
                 break
             page += 1
-        return [
-            self._normalize_document(document)
-            for document in documents
-        ]
+        normalized_documents = []
+        for document in documents:
+            normalized = self._normalize_document(document)
+            document_id = normalized["doc_id"]
+            if str(normalized.get("status") or "").upper() == "DONE":
+                self._schedule_formula_job(document_id)
+            report = self._formula_reports.get(document_id)
+            if report:
+                normalized["formula_audit"] = report
+            normalized_documents.append(normalized)
+        return normalized_documents
+
+    def _schedule_formula_job(self, document_id: str) -> None:
+        if (
+            not document_id
+            or document_id in self._formula_audited
+            or document_id in self._formula_jobs
+        ):
+            return
+        task = asyncio.create_task(self._wait_and_normalize_formulas(document_id))
+        self._formula_jobs[document_id] = task
+
+    async def _wait_and_normalize_formulas(self, document_id: str) -> None:
+        try:
+            # Parsing is asynchronous in RAGFlow.  Keep upload responsive while
+            # waiting for the final chunk set, then normalize before users rely
+            # on the new document for formula retrieval.
+            for _ in range(360):
+                data = await self.client.list_documents(page=1, page_size=100)
+                documents = data.get("docs") or data.get("documents") or []
+                current = next(
+                    (
+                        item
+                        for item in documents
+                        if isinstance(item, dict)
+                        and str(item.get("id") or "") == document_id
+                    ),
+                    None,
+                )
+                status = str((current or {}).get("run") or "").upper()
+                if status == "DONE":
+                    await self.normalize_document_formulas(document_id)
+                    return
+                if status in {"FAIL", "CANCEL"} or current is None:
+                    return
+                await asyncio.sleep(5)
+        except Exception:
+            logger.exception("文档 %s 的公式标准化任务失败", document_id)
+        finally:
+            self._formula_jobs.pop(document_id, None)
+
+    async def _all_document_chunks(self, document_id: str) -> list[dict[str, Any]]:
+        chunks: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            data = await self.client.list_chunks(document_id, page=page, page_size=100)
+            batch = [
+                item for item in (data.get("chunks") or []) if isinstance(item, dict)
+            ]
+            chunks.extend(batch)
+            total = int(data.get("total") or len(chunks))
+            if len(batch) < 100 or len(chunks) >= total:
+                return chunks
+            page += 1
+
+    @staticmethod
+    def _formula_questions(
+        labels: tuple[str, ...], chunks: list[dict[str, Any]]
+    ) -> list[str]:
+        questions: list[str] = []
+        for label in labels:
+            questions.append(f"方程({label})的完整 LaTeX 公式是什么？")
+            label_re = re.compile(rf"[（(]\s*{re.escape(label)}\s*[）)]")
+            for chunk in chunks:
+                text = normalize_pdf_symbol_text(str(chunk.get("content") or ""))
+                for match in label_re.finditer(text):
+                    # Only use the local explanation around the equation label.
+                    # A RAGFlow chunk can contain several later sections whose
+                    # equations are unrelated to this formula.
+                    window = text[max(0, match.start() - 260) : match.end() + 80]
+                    for sentence in re.split(r"[。\n]", window):
+                        sentence = re.sub(r"\s+", " ", sentence).strip(" ：:，,")
+                        sentence = re.sub(r"\[\d+(?:-\d+)?\]", "", sentence).strip()
+                        sentence = re.sub(r"(?:如下|为)$", "", sentence).strip()
+                        if (
+                            8 <= len(sentence) <= 140
+                            and "方程" in sentence
+                            and "图像" not in sentence
+                            and (
+                                "解" in sentence
+                                or "表达式" in sentence
+                                or "公式" in sentence
+                            )
+                        ):
+                            questions.append(sentence.rstrip("？?") + "是什么？")
+        return list(dict.fromkeys(questions))[:5]
+
+    async def normalize_document_formulas(
+        self, doc_id: str, dry_run: bool = False
+    ) -> dict[str, Any]:
+        chunks = await self._all_document_chunks(doc_id)
+        standardized = []
+        standard_chunks = []
+        visual_review = []
+        already_standard = 0
+        for chunk in chunks:
+            chunk_id = str(chunk.get("id") or "")
+            result = standardize_formula_markdown(str(chunk.get("content") or ""))
+            if result.changed:
+                standardized.append((chunk, result))
+            elif result.needs_visual_review:
+                visual_review.append(chunk_id)
+            elif "\\[" in result.content or "$$" in result.content:
+                already_standard += 1
+                if result.equation_labels:
+                    standard_chunks.append((chunk, result))
+
+        metadata_refreshed = 0
+        if not dry_run:
+            for chunk, result in [*standardized, *standard_chunks]:
+                chunk_id = str(chunk.get("id") or "")
+                labels = result.equation_labels
+                questions = self._formula_questions(labels, chunks)
+                keywords = ["LaTeX"]
+                for label in labels:
+                    keywords.extend([f"公式({label})", f"方程({label})"])
+                keywords = list(dict.fromkeys(keywords))
+                old_questions = [str(item) for item in chunk.get("questions") or []]
+                old_keywords = [
+                    str(item) for item in chunk.get("important_keywords") or []
+                ]
+                if (
+                    not result.changed
+                    and old_questions == questions
+                    and old_keywords == keywords
+                ):
+                    continue
+                await self.client.update_chunk(
+                    doc_id,
+                    chunk_id,
+                    content=result.content,
+                    questions=questions,
+                    important_keywords=keywords,
+                )
+                if not result.changed:
+                    metadata_refreshed += 1
+
+        report: dict[str, Any] = {
+            "status": "preview" if dry_run else "success",
+            "message": (
+                f"扫描 {len(chunks)} 个 Chunk，标准化 {len(standardized)} 个；"
+                f"{len(visual_review)} 个需要视觉模型复核"
+            ),
+            "document_id": doc_id,
+            "dry_run": dry_run,
+            "scanned": len(chunks),
+            "standardized": len(standardized),
+            "metadata_refreshed": metadata_refreshed,
+            "already_standard": already_standard,
+            "needs_visual_review": len(visual_review),
+            "standardized_chunk_ids": [
+                str(item[0].get("id") or "") for item in standardized
+            ],
+            "visual_review_chunk_ids": visual_review,
+        }
+        if not dry_run:
+            self._formula_audited.add(doc_id)
+            self._formula_reports[doc_id] = report
+            logger.info(report["message"])
+        return report
 
     async def get_document_chunks(
         self, doc_id: str, page: int = 1, page_size: int = 10

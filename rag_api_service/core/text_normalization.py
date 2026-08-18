@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 
 # Word/PDF documents created with SymbolMT commonly expose the original
@@ -50,6 +51,29 @@ _SYMBOL_PUA_MAP = {
 }
 
 _PRIVATE_USE_RE = re.compile(r"[\ue000-\uf8ff]")
+_DISPLAY_MATH_RE = re.compile(r"\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$")
+_LATEX_COMMAND_RE = re.compile(
+    r"\\(?:sum|frac|exp|ln|partial|prod|sqrt|begin|cos|sin|tau|mu|gamma)\b"
+)
+_DUPLICATED_EQUATION_LABEL_RE = re.compile(
+    r"[（(]\s*(\d+(?:\.\d+)+)\s*[）)]\s*[（(]\s*\1\s*[）)]"
+)
+_EQUATION_LABEL_RE = re.compile(r"[（(]\s*(\d+(?:\.\d+)+)\s*[）)]")
+_LATEX_TAG_RE = re.compile(r"\\tag\{\s*(\d+(?:\.\d+)+)\s*\}")
+_NEXT_ASSIGNMENT_RE = re.compile(
+    r",\s+(?=(?:\\[A-Za-z]+(?:_\{?\w+\}?)?|"
+    r"[A-Za-z](?:\^\{[^}]+\}|_\{?\w+\}?)?)\s*=)"
+)
+
+
+@dataclass(frozen=True)
+class FormulaNormalization:
+    """Result of a conservative Markdown-LaTeX normalization pass."""
+
+    content: str
+    changed: bool
+    equation_labels: tuple[str, ...] = ()
+    needs_visual_review: bool = False
 
 
 def normalize_pdf_symbol_text(text: str) -> str:
@@ -63,3 +87,99 @@ def normalize_pdf_symbol_text(text: str) -> str:
     if not text or not _PRIVATE_USE_RE.search(text):
         return text
     return "".join(_SYMBOL_PUA_MAP.get(character, character) for character in text)
+
+
+def _balance_latex_braces(text: str) -> str | None:
+    """Close trailing OCR-dropped braces, rejecting structurally unsafe text."""
+
+    depth = 0
+    escaped = False
+    for character in text:
+        if escaped:
+            escaped = False
+            continue
+        if character == "\\":
+            escaped = True
+        elif character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth < 0:
+                return None
+    if depth > 4:
+        return None
+    return text + ("}" * depth)
+
+
+def _as_aligned_latex(formula: str, label: str) -> str | None:
+    formula = re.sub(r"(?<!\\)\bln\b", r"\\ln", formula.strip())
+    formula = _balance_latex_braces(formula)
+    if formula is None:
+        return None
+
+    parts: list[str] = []
+    for line in re.split(r"\n+", formula):
+        for part in _NEXT_ASSIGNMENT_RE.split(line.strip()):
+            part = part.strip()
+            if part:
+                parts.append(part)
+    if not parts or any("=" not in part for part in parts):
+        return None
+
+    aligned = []
+    for part in parts:
+        left, right = part.split("=", 1)
+        aligned.append(f"{left.rstrip()} &= {right.lstrip()}")
+    body = " \\\\\n".join(aligned)
+    return (
+        "\\[\n"
+        "\\begin{aligned}\n"
+        f"{body}\n"
+        "\\end{aligned}\n"
+        f"\\tag{{{label}}}\n"
+        "\\]"
+    )
+
+
+def standardize_formula_markdown(text: str) -> FormulaNormalization:
+    """Convert only high-confidence formula chunks to Markdown-LaTeX.
+
+    RAGFlow/DeepDOC can concatenate a useful LaTeX transcription with a second,
+    flattened OCR copy.  The repeated equation label is a stable boundary
+    between those two representations.  We retain the LaTeX side, repair only
+    trailing braces, and wrap it in display-math delimiters.  Flattened OCR is
+    never reconstructed because doing so could silently change the equation.
+    """
+
+    normalized = normalize_pdf_symbol_text(text)
+    labels = tuple(
+        dict.fromkeys(
+            [
+                *_EQUATION_LABEL_RE.findall(normalized),
+                *_LATEX_TAG_RE.findall(normalized),
+            ]
+        )
+    )
+    if _DISPLAY_MATH_RE.search(normalized):
+        return FormulaNormalization(normalized, False, labels, False)
+
+    duplicate = _DUPLICATED_EQUATION_LABEL_RE.search(normalized)
+    latex_commands = _LATEX_COMMAND_RE.findall(normalized)
+    if duplicate and len(latex_commands) >= 2:
+        label = duplicate.group(1)
+        formula = normalized[: duplicate.start()].strip()
+        converted = _as_aligned_latex(formula, label)
+        if converted:
+            return FormulaNormalization(converted, True, (label,), False)
+
+    # Equation labels, dense mathematical glyphs, or formula images without a
+    # valid LaTeX transcription must be re-read from the page image by a VLM.
+    math_signal_count = len(
+        re.findall(r"[=∑∫∂√±≤≥α-ωΑ-Ω]|_[A-Za-z0-9{]", normalized)
+    )
+    chinese_count = len(re.findall(r"[\u3400-\u9fff]", normalized))
+    chinese_ratio = chinese_count / max(len(normalized), 1)
+    needs_visual_review = bool(
+        labels and math_signal_count >= 3 and chinese_ratio < 0.2
+    )
+    return FormulaNormalization(normalized, False, labels, needs_visual_review)
