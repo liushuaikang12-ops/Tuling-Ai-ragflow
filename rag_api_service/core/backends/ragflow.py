@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import httpx
@@ -11,6 +12,14 @@ from core.text_normalization import normalize_pdf_symbol_text
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
+
+_FORMULA_INTENT_RE = re.compile(r"公式|表达式|方程.*(?:什么|多少|给出|写出|列出)|解析解")
+_FORMULA_REFERENCE_RE = re.compile(
+    r"(?:方程|式)\s*[（(]\s*(\d+(?:\.\d+)+)\s*[）)]"
+)
+_LATEX_COMMAND_RE = re.compile(
+    r"\\(?:sum|frac|exp|ln|partial|prod|sqrt|begin|cos|sin|tau|mu|gamma)\b"
+)
 
 
 class RAGFlowBackend:
@@ -175,6 +184,83 @@ class RAGFlowBackend:
         )
         return f"📄 **{name}**{score_text}\n\n> {content}"
 
+    @staticmethod
+    def _formula_references(chunks: list[dict[str, Any]]) -> list[str]:
+        def collect(items: list[dict[str, Any]]) -> list[str]:
+            references: list[str] = []
+            for chunk in items:
+                content = normalize_pdf_symbol_text(str(chunk.get("content") or ""))
+                for reference in _FORMULA_REFERENCE_RE.findall(content):
+                    if reference not in references:
+                        references.append(reference)
+            return references
+
+        # An equation explanation normally ranks near the top. Restricting the
+        # first pass avoids pulling unrelated equation numbers from lower-ranked
+        # chunks of the same paper; fall back to all Top-K only when necessary.
+        references = collect(chunks[:3]) or collect(chunks)
+        return references[:2]
+
+    @staticmethod
+    def _formula_score(chunk: dict[str, Any], references: list[str]) -> int:
+        content = normalize_pdf_symbol_text(str(chunk.get("content") or ""))
+        reference_hits = sum(content.count(f"({reference})") for reference in references)
+        latex_hits = len(_LATEX_COMMAND_RE.findall(content))
+        operator_hits = len(re.findall(r"[=∑∂]|_\{|\^\{", content))
+        return reference_hits * 8 + latex_hits * 3 + min(operator_hits, 12)
+
+    async def _expand_formula_chunks(
+        self,
+        query: str,
+        chunks: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Retrieve formula bodies referenced by explanatory text chunks.
+
+        DeepDoc may put “equation (1.1) is as follows” and the equation image in
+        separate chunks.  A second, reference-focused retrieval prevents the
+        explanatory chunk from entering Top-K without its formula body.
+        """
+
+        if not _FORMULA_INTENT_RE.search(query):
+            return chunks, []
+        references = self._formula_references(chunks)
+        if not references:
+            return chunks, []
+
+        expanded_queries: list[str] = []
+        candidates: list[dict[str, Any]] = []
+        for reference in references:
+            expansion_query = f"方程({reference})的完整公式和表达式"
+            expanded_queries.append(expansion_query)
+            result = await self.client.retrieve(
+                expansion_query,
+                similarity_threshold=0.0,
+                vector_similarity_weight=Settings.RAGFLOW_VECTOR_SIMILARITY_WEIGHT,
+                top_k=max(Settings.RAGFLOW_TOP_K, 16),
+                rerank_id=Settings.RAGFLOW_RERANK_ID,
+            )
+            candidates.extend(
+                item
+                for item in (result.get("chunks") or [])
+                if isinstance(item, dict)
+            )
+
+        # Formula-rich exact-reference chunks go before the original Top-K.
+        candidates.sort(
+            key=lambda item: self._formula_score(item, references),
+            reverse=True,
+        )
+        merged: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for item in [*candidates[:4], *chunks]:
+            chunk_id = str(item.get("id") or "")
+            if chunk_id and chunk_id in seen_ids:
+                continue
+            if chunk_id:
+                seen_ids.add(chunk_id)
+            merged.append(item)
+        return merged, expanded_queries
+
     async def _generate_answer(
         self,
         query: str,
@@ -212,7 +298,10 @@ class RAGFlowBackend:
 
         prompt = (
             "你是企业知识库问答助手。请仅依据给定资料回答问题，不要编造。"
-            "如果资料不足，请明确说明。回答中可使用 [1]、[2] 标注依据。\n\n"
+            "如果资料不足，请明确说明。回答中可使用 [1]、[2] 标注依据。"
+            "当用户询问公式或表达式时，若资料中存在 LaTeX、等号或数学符号，"
+            "请逐项抄录并用 LaTeX 排版；不要仅因原文换行或格式不整齐就判断公式缺失，"
+            "无法确认的单个符号应标注为 OCR 不确定。\n\n"
             f"问题：{query}\n\n资料：\n" + "\n\n".join(context_parts)
         )
         base_url = Settings.API_BASE_URL.rstrip("/")
@@ -251,6 +340,7 @@ class RAGFlowBackend:
             )
             raw_chunks = result.get("chunks") or []
             chunks = [chunk for chunk in raw_chunks if isinstance(chunk, dict)]
+            chunks, expanded_queries = await self._expand_formula_chunks(query, chunks)
             answer = await self._generate_answer(query, chunks)
             return {
                 "answer": answer,
@@ -258,6 +348,7 @@ class RAGFlowBackend:
                 "retrieval": {
                     "backend": "ragflow",
                     "total": result.get("total") or len(chunks),
+                    "formula_expansion": expanded_queries,
                 },
             }
         except Exception as exc:

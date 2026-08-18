@@ -107,7 +107,9 @@ RAG_BACKEND=legacy   → 需要同时设置 ENABLE_LEGACY_RAG=true
 部分由 Word/MathType 生成的论文 PDF 会把 SymbolMT 字体暴露为 `U+F0xx`
 私有区字符。`rag_api_service` 会在展示 Chunk、拼接来源和生成回答前，将
 这些编码还原为标准的希腊字母与数学符号；前端使用 KaTeX 渲染模型返回的
-LaTeX。这个兼容层不能凭空恢复解析阶段已经丢失的公式结构：如果 RAGFlow
+LaTeX。公式类问题还会从高相关 Chunk 中识别“方程 (1.1)”等编号，执行一次
+编号定向召回，避免“表达式如下”和公式本体被分到不同 Chunk 后只召回前者。
+这个兼容层不能凭空恢复解析阶段已经丢失的公式结构：如果 RAGFlow
 解析日志中出现视觉模型 `429`，应先处理模型配额或限流，再重新解析原文档。
 
 ### 3. MCP 变为纯查询代理
